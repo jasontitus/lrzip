@@ -13,9 +13,11 @@ bytes like xz -9e for maximum compression.
 are compressed as one large block instead of one block per thread, since
 independently compressed blocks cost ratio (measured ~4% on lzma and ~6% on
 zpaq). Use -p to force threaded operation at level 9.
-Add automatic x86 BCJ branch conversion for lzma compression: blocks that
-trial detection identifies as executable code are branch converted before
-compression, several percent smaller on binaries. Archives using it need
+Add automatic prefilters for lzma compression, chosen per block by trial:
+x86 BCJ branch conversion for executable code (several percent smaller on
+binaries), arm64 BCJ, and byte delta with distance 1-4 for sampled or
+tabular data (~5% smaller on 16 bit medical imagery). Blocks where no
+filter clearly wins are stored unfiltered. Archives using a filter need
 this version or later to decompress.
 Below level 9, lzma and zstd now compress half as many blocks per chunk,
 each twice as large, using two threads per block. All cpus stay busy while

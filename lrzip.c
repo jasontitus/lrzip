@@ -1360,6 +1360,10 @@ next_chunk:
 				print_verbose("zstd");
 			else if (ctype == CTYPE_LZMA_BCJ)
 				print_verbose("lzma+bcj");
+			else if (ctype == CTYPE_LZMA_BCJ_ARM64)
+				print_verbose("lzma+bcj-arm64");
+			else if (ctype >= CTYPE_LZMA_DELTA1 && ctype <= CTYPE_LZMA_DELTA4)
+				print_verbose("lzma+delta%d", ctype - CTYPE_LZMA_DELTA1 + 1);
 			else
 				print_verbose("Dunno wtf");
 			if (save_ctype == 255)
@@ -1459,6 +1463,10 @@ done:
 		print_output("rzip + zstd\n");
 	else if (save_ctype == CTYPE_LZMA_BCJ)
 		print_output("rzip + lzma + x86 bcj\n");
+	else if (save_ctype == CTYPE_LZMA_BCJ_ARM64)
+		print_output("rzip + lzma + arm64 bcj\n");
+	else if (save_ctype >= CTYPE_LZMA_DELTA1 && save_ctype <= CTYPE_LZMA_DELTA4)
+		print_output("rzip + lzma + delta %d\n", save_ctype - CTYPE_LZMA_DELTA1 + 1);
 	else
 		print_output("Dunno wtf\n");
 

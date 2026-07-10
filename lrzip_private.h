@@ -270,8 +270,15 @@ typedef sem_t cksem_t;
 #define CTYPE_GZIP 7
 #define CTYPE_ZPAQ 8
 #define CTYPE_ZSTD 9
-/* lzma with the x86 BCJ branch converter applied first */
+/* lzma with a reversible filter applied first: x86 or arm64 BCJ branch
+ * conversion for executable code, or byte delta with distance 1-4 for
+ * numeric/sampled data. The filter is chosen per block by trial. */
 #define CTYPE_LZMA_BCJ 10
+#define CTYPE_LZMA_BCJ_ARM64 11
+#define CTYPE_LZMA_DELTA1 12
+#define CTYPE_LZMA_DELTA2 13
+#define CTYPE_LZMA_DELTA3 14
+#define CTYPE_LZMA_DELTA4 15
 
 #define PASS_LEN 512
 #define HASH_LEN 64
