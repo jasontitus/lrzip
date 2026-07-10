@@ -218,3 +218,36 @@ zpaq remains the best ratio at extreme cost, and gains a further 2.5% at
 -L9 from single block mode. The classic context mixing models were
 re-verified against the newer libzpaq 7.15 archiver methods and remain
 superior for lrzip's use (see libzpaq/zpaq_lrzip.cpp).
+
+
+Second 2026 update: x86 BCJ prefilter and overlapped block threading
+
+Two further changes benchmarked on the same machine. Below level 9, lzma
+and zstd now compress half as many blocks per chunk at twice the size with
+two threads each (overlapped threading), and lzma blocks that trial
+detection identifies as executable code are branch converted (BCJ) before
+compression. All archives verified byte for byte.
+
+bins.tar (1GB tar of /usr/lib and /usr/bin ELF binaries)
+
+Compression		Size		Percentage	Compress	Decompress
+None			1073741824	100
+old lrzip (default)	239036025	22.3		2m10s		0m8.2s
+new lrzip (default)	233332246	21.7		3m34s		0m10.9s
+old lrzip -L9		232878807	21.7		3m17s		0m8.4s
+new lrzip -L9		222617263	20.7		8m25s		0m18.2s
+
+Updated defaults with overlapped threading (supersedes the tables above):
+
+enwik9  new default lzma	217124468	21.7	8m24s	0m11.0s
+  (was 218336904 with one block per thread, 223870481 originally: -3.0%)
+enwik9  new default zstd	233582800	23.4	4m45s	0m6.4s
+linux.tar new default lzma	141584831	10.0	4m22s	0m13.6s
+  (was 142061741 with one block per thread, 145848085 originally: -2.9%)
+
+Notes. On executable content the BCJ filter plus larger blocks give 2.4%
+smaller archives at the default level and 4.4% smaller at -L9 versus the
+old code at the same levels. The trial detection correctly leaves text
+and already filtered blocks alone (measured zero effect on enwik9). The
+overlapped threading recovers a further 0.5% on lzma text compression at
+default settings with all cpus still busy.
