@@ -243,6 +243,13 @@ Set the compression level from 1 to 9. The default is to use level 7, which
 gives good all round compression. The compression level is also strongly related
 to how much memory lrzip uses. See the \-w option for details.
 .IP
+Level 9 is a maximum compression mode for the lzma, zpaq and zstd back ends:
+each stream is compressed as one large block with a dictionary sized to ram
+instead of being split into one block per thread, and lzma uses 273 fast
+bytes like xz \-9e. This gives the best possible ratio but sacrifices
+parallelism, so it is several times slower on multicore machines. Specifying
+\-p explicitly restores threaded operation at level 9.
+.IP
 .IP "\fB-N value\fP"
 The default nice value is 19. This option can be used to set the priority
 scheduling for the lrzip backup or decompression. Valid nice values are

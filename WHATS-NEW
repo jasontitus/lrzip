@@ -9,6 +9,10 @@ Files using -Z require this version or later to decompress.
 LZMA levels are no longer rescaled: -L maps directly onto the lzma level
 scale with explicit large dictionaries sized to ram, and -L9 uses 273 fast
 bytes like xz -9e for maximum compression.
+-L9 is now a true maximum compression mode for lzma, zpaq and zstd: streams
+are compressed as one large block instead of one block per thread, since
+independently compressed blocks cost ratio (measured ~4% on lzma and ~6% on
+zpaq). Use -p to force threaded operation at level 9.
 Verified zpaq classic context mixing levels still beat the newer libzpaq
 archiver methods for ratio; no change to the -z path.
 Update embedded libzpaq from 5.00 to 7.15 - faster & better compression.

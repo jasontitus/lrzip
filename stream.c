@@ -409,7 +409,9 @@ retry:
 				lzma_level,
 				dictsize, /* dict size scaled to level and ram */
 				-1, -1, -1, lzma_fb, /* lc, lp, pb, fb */
-				control->threads > 1 ? 2: 1);
+				control->threads > 1 || control->compression_level == 9 ? 2 : 1);
+				/* level 9 packs whole streams into single blocks, so
+				 * keep the encoder's match finder thread. */
 				/* LZMA spec has threads = 1 or 2 only. */
 	if (lzma_ret != SZ_OK) {
 		switch (lzma_ret) {

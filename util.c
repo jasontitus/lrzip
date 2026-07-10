@@ -131,7 +131,17 @@ void setup_overhead(rzip_control *control)
 		 * overhead for these sizes does not fit in usable ram. */
 		i64 dictsize = (level <= 4 ? (1 << (level * 2 + 16)) :
 				(level <= 6 ? (1 << (level + 20)) :
-				(level == 7 ? (1 << 26) : (1 << 27))));
+				(level == 7 ? (1 << 26) :
+				(level == 8 ? (1 << 27) : ((i64)1 << 28)))));
+
+		/* The encoder needs ~11.5 times the dictionary per thread; cap
+		 * the dictionary so it fits the third of ram we will allow
+		 * ourselves with room for the block buffers. */
+		i64 dictcap = 1 << 20;
+		while (dictcap * 13 <= control->ramsize / 3 && dictcap < ((i64)1 << 28))
+			dictcap <<= 1;
+		if (dictsize > dictcap)
+			dictsize = dictcap;
 
 		control->lzma_dictsize = dictsize;
 		control->overhead = (dictsize * 23 / 2) + (6 * 1024 * 1024) + 16384;

@@ -320,7 +320,7 @@ int main(int argc, char *argv[])
 	struct timeval start_time, end_time;
 	struct sigaction handler;
 	double seconds,total_time; // for timers
-	bool nice_set = false;
+	bool nice_set = false, threads_set = false;
 	int c, i;
 	int hours,minutes;
 	extern int optind;
@@ -505,6 +505,7 @@ int main(int argc, char *argv[])
 				failure("Must have at least one thread\n");
 			if (*endptr)
 				failure("Extra characters after number of threads: \'%s\'\n", endptr);
+			threads_set = true;
 			break;
 		case 'P':
 			control->flags |= FLAG_SHOW_PROGRESS;
@@ -625,6 +626,18 @@ int main(int argc, char *argv[])
 	if (UNLIMITED && STDIN) {
 		print_err("Cannot have -U and stdin, unlimited mode disabled.\n");
 		control->flags &= ~FLAG_UNLIMITED;
+	}
+
+	/* Level 9 is maximum compression: compress each stream as a single
+	 * large block with a dictionary sized to ram instead of splitting
+	 * chunks into one block per thread, since independently compressed
+	 * blocks cost ratio. Parallelism is sacrificed deliberately; -p can
+	 * still force multiple threads. */
+	if (control->compression_level == 9 &&
+	    (LZMA_COMPRESS || ZPAQ_COMPRESS || ZSTD_COMPRESS) && !threads_set &&
+	    !(DECOMPRESS || TEST_ONLY || INFO)) {
+		control->threads = 1;
+		print_verbose("Maximum compression level 9: using single block per stream\n");
 	}
 
 	setup_overhead(control);
