@@ -1222,7 +1222,7 @@ bool get_fileinfo(rzip_control *control)
 	i64 expected_size, infile_size, chunk_size = 0, chunk_total = 0;
 	int header_length, stream = 0, chunk = 0;
 	char *tmp, *infilecopy = NULL;
-	char chunk_byte = 0;
+	char chunk_byte = 0, chunk_filter = 0;
 	long double cratio;
 	uchar ctype = 0;
 	uchar save_ctype = 255;
@@ -1273,6 +1273,11 @@ bool get_fileinfo(rzip_control *control)
 			fatal_goto(("Failed to read chunk_byte in get_fileinfo\n"), error);
 		if (unlikely(chunk_byte < 1 || chunk_byte > 8))
 			fatal_goto(("Invalid chunk bytes %d\n", chunk_byte), error);
+		/* v0.8+: chunk prefilter byte */
+		if (control->major_version > 0 || control->minor_version >= 8) {
+			if (unlikely(read(fd_in, &chunk_filter, 1) != 1))
+				fatal_goto(("Failed to read chunk_filter in get_fileinfo\n"), error);
+		}
 		if (control->major_version == 0 && control->minor_version > 5) {
 			if (unlikely(read(fd_in, &control->eof, 1) != 1))
 				fatal_goto(("Failed to read eof in get_fileinfo\n"), error);
@@ -1293,8 +1298,11 @@ bool get_fileinfo(rzip_control *control)
 	} else if (control->major_version == 0 && control->minor_version == 5) {
 		ofs = 25;
 		header_length = 25;
-	} else {
+	} else if (control->major_version == 0 && control->minor_version < 8) {
 		ofs = 26 + chunk_byte;
+		header_length = 1 + (chunk_byte * 3);
+	} else {
+		ofs = 27 + chunk_byte;
 		header_length = 1 + (chunk_byte * 3);
 	}
 	if (control->major_version == 0 && control->minor_version < 6 &&
@@ -1308,6 +1316,8 @@ next_chunk:
 	print_verbose("Rzip chunk:       %d\n", ++chunk);
 	if (chunk_byte)
 		print_verbose("Chunk byte width: %d\n", chunk_byte);
+	if (chunk_filter)
+		print_verbose("Chunk prefilter:  %s\n", chunk_filter == 1 ? "x86 bcj" : "arm64 bcj");
 	if (chunk_size) {
 		chunk_total += chunk_size;
 		print_verbose("Chunk size:       %"PRId64"\n", chunk_size);
@@ -1409,6 +1419,12 @@ next_chunk:
 		if (unlikely(chunk_byte < 1 || chunk_byte > 8))
 			fatal_goto(("Invalid chunk bytes %d\n", chunk_byte), error);
 		ofs++;
+		/* v0.8+: chunk prefilter byte */
+		if (control->major_version > 0 || control->minor_version >= 8) {
+			if (unlikely(read(fd_in, &chunk_filter, 1) != 1))
+				fatal_goto(("Failed to read chunk_filter in get_fileinfo\n"), error);
+			ofs++;
+		}
 		if (control->major_version == 0 && control->minor_version > 5) {
 			if (unlikely(read(fd_in, &control->eof, 1) != 1))
 				fatal_goto(("Failed to read eof in get_fileinfo\n"), error);
