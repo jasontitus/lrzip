@@ -273,3 +273,39 @@ architectural interaction verified against xz --arm64 (which gains 4%
 on the same aarch64 binaries raw). Blocks simply stay unfiltered, and
 relocatable .ko objects were confirmed not to benefit from arm64 BCJ
 even outside lrzip.
+
+
+Fourth 2026 update: branch conversion before rzip (format 0.8)
+
+Executable chunks are now branch converted BEFORE the rzip stage when a
+duplicate window probe shows conversion creates more long range duplicate
+code than it breaks. Results (same machine, all archives verified byte for
+byte; "prev" is the previous 2026 code with post-rzip filters only):
+
+bins.tar (1GB tar of x86_64 ELF binaries)
+
+Compression		Size		Percentage	Compress	Decompress
+None			1073741824	100
+old lrzip (default)	239036025	22.3		2m10s		0m8.2s
+prev (default)		233332246	21.7		3m34s		0m10.9s
+new  (default)		228716503	21.3		3m40s		0m13.6s
+old lrzip -L9		232878807	21.7		3m17s		0m8.4s
+prev -L9		222617263	20.7		8m25s		0m18.2s
+new  -L9		217900863	20.3		9m48s		0m22.2s
+
+arm64-linked.tar (94MB of aarch64 ELF binaries)
+old lrzip		16560305	17.7
+new lrzip		16028165	17.1	(-3.2%; arm64 BCJ gained
+					 nothing at all post-rzip)
+
+Text and source are untouched by the probe: enwik9 and linux-6.6.tar
+outputs are identical to the previous update plus one header byte. A
+corpus of three identical copies of a binary tar (the dedup case branch
+conversion could hurt) is correctly refused by the probe: forcing the
+filter would cost 26%, the probe leaves it unfiltered and the archive
+still compresses slightly better than the old code.
+
+Overall versus the original code at the same level, archives of x86
+binaries are now 4.3% smaller at the default level and 6.4% smaller at
+-L9; wikipedia text 3.0% / 4.1%; kernel source 2.9% / 2.0%; aarch64
+binaries 3.2%; 16 bit imagery ~5%.
