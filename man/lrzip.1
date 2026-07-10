@@ -243,11 +243,19 @@ Set the compression level from 1 to 9. The default is to use level 7, which
 gives good all round compression. The compression level is also strongly related
 to how much memory lrzip uses. See the \-w option for details.
 .IP
-With the lzma back end each block is trial tested for a helpful prefilter:
-x86 or arm64 BCJ branch conversion for executable code, or byte delta for
-sampled data such as uncompressed imagery or audio. A filter is only applied
-when a fast trial compression of a sample shows a clear win, and is recorded
-per block, so mixed content archives use the right filter per region.
+With the lzma and zstd back ends each block is trial tested for a helpful
+prefilter: x86 or arm64 BCJ branch conversion for executable code, or byte
+delta for sampled data such as uncompressed imagery or audio. A filter is
+only applied when a fast trial compression of a sample shows a clear win,
+and is recorded per block, so mixed content archives use the right filter
+per region.
+.IP
+In addition, whole rzip chunks that a duplicate window probe identifies as
+executable code are branch converted before the rzip stage itself, which
+compresses binaries several percent smaller again. The probe compares long
+range duplicate content before and after conversion and refuses the filter
+when conversion would break existing duplicates, so archives that rely on
+rzip deduplicating repeated binaries are unaffected.
 .IP
 Level 9 is a maximum compression mode for the lzma, zpaq and zstd back ends:
 each stream is compressed as one large block with a dictionary sized to ram

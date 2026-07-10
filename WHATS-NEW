@@ -1,3 +1,15 @@
+lrzip-0.8.0
+
+File format version 0.8: chunk headers carry a prefilter byte. 0.8 reads
+all older archives; older versions cannot read 0.8 archives.
+Executable code is now branch converted BEFORE the rzip stage on chunks
+where a duplicate-window probe shows it pays: x86 conversion creates long
+range duplicate code sequences that rzip then removes (several percent
+smaller archives of binaries), and arm64 code gains at the entropy level.
+The probe counts duplicate windows at content defined anchors before and
+after conversion, so archives relying on long range deduplication of
+repeated binaries are automatically left unfiltered.
+
 lrzip-0.7.0
 
 New file format mostly backward compatible except for streamed large STDIO
