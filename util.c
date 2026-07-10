@@ -118,18 +118,56 @@ void setup_overhead(rzip_control *control)
 	/* Work out the compression overhead per compression thread for the
 	 * compression back-ends that need a lot of ram */
 	if (LZMA_COMPRESS) {
-		int level = control->compression_level * 7 / 9;
+		int level = control->compression_level;
 
 		if (!level)
 			level = 1;
-		i64 dictsize = (level <= 5 ? (1 << (level * 2 + 14)) :
-				(level == 6 ? (1 << 25) : (1 << 26)));
+		else if (level > 9)
+			level = 9;
+		/* Dictionary sizes per level. The top levels are larger than
+		 * the SDK per-level defaults: rzip hands the back end blocks
+		 * that are typically hundreds of MB, so a larger window pays
+		 * off in ratio. open_stream_out reduces threads if the
+		 * overhead for these sizes does not fit in usable ram. */
+		i64 dictsize = (level <= 4 ? (1 << (level * 2 + 16)) :
+				(level <= 6 ? (1 << (level + 20)) :
+				(level == 7 ? (1 << 26) : (1 << 27))));
 
+		control->lzma_dictsize = dictsize;
 		control->overhead = (dictsize * 23 / 2) + (6 * 1024 * 1024) + 16384;
 		/* LZMA spec shows memory requirements as 6MB, not 4MB and state size
 		 * where default is 16KB */
-	} else if (ZPAQ_COMPRESS)
-		control->overhead = 112 * 1024 * 1024;
+	} else if (ZPAQ_COMPRESS) {
+		/* Classic model memory: mid.cfg ~111MB, max.cfg (levels 8+)
+		 * ~246MB per thread. */
+		if (control->compression_level / 4 + 1 >= 3)
+			control->overhead = 256 * 1024 * 1024;
+		else
+			control->overhead = 112 * 1024 * 1024;
+	}
+	else if (ZSTD_COMPRESS) {
+		/* Map lrzip levels 1-9 onto the zstd scale, biased towards the
+		 * strong end since rzip has already taken out the long range
+		 * redundancy and speed remains good. Window log rises with
+		 * level; long distance matching over these windows recovers
+		 * the mid-range redundancy that the small default zstd
+		 * windows miss. */
+		static const int zstd_levels[10] = { 0, 1, 4, 7, 10, 13, 16, 19, 21, 22 };
+		static const int zstd_wlogs[10] = { 0, 24, 24, 25, 25, 26, 26, 27, 27, 27 };
+		int level = control->compression_level;
+
+		if (level < 1)
+			level = 1;
+		else if (level > 9)
+			level = 9;
+		control->zstd_level = zstd_levels[level];
+		control->zstd_wlog = zstd_wlogs[level];
+		/* Window buffer plus match finder tables; the btultra2 levels
+		 * (20+) use much larger chain/hash tables. */
+		control->overhead = ((i64)1 << control->zstd_wlog) *
+			(control->zstd_level >= 20 ? 16 : 4) +
+			(64 * 1024 * 1024);
+	}
 }
 
 void setup_ram(rzip_control *control)
@@ -235,7 +273,7 @@ bool read_config(rzip_control *control)
 			if ( control->compression_level < 1 || control->compression_level > 9 )
 				failure_return(("CONF.FILE error. Compression Level must between 1 and 9"), false);
 		} else if (isparameter(parameter, "compressionmethod")) {
-			/* valid are rzip, gzip, bzip2, lzo, lzma (default), and zpaq */
+			/* valid are rzip, gzip, bzip2, lzo, lzma (default), zpaq and zstd */
 			if (control->flags & FLAG_NOT_LZMA)
 				failure_return(("CONF.FILE error. Can only specify one compression method"), false);
 			if (isparameter(parametervalue, "bzip2"))
@@ -248,6 +286,8 @@ bool read_config(rzip_control *control)
 				control->flags |= FLAG_NO_COMPRESS;
 			else if (isparameter(parametervalue, "zpaq"))
 				control->flags |= FLAG_ZPAQ_COMPRESS;
+			else if (isparameter(parametervalue, "zstd"))
+				control->flags |= FLAG_ZSTD_COMPRESS;
 			else if (!isparameter(parametervalue, "lzma")) /* oops, not lzma! */
 				failure_return(("CONF.FILE error. Invalid compression method %s specified\n",parametervalue), false);
 		} else if (isparameter(parameter, "lzotest")) {

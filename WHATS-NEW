@@ -2,6 +2,15 @@ lrzip-0.7.0
 
 New file format mostly backward compatible except for streamed large STDIO
 compressed files and encrypted files.
+Add zstd (Zstandard) back end compression with -Z / --zstd, using long
+distance matching over large windows. Much faster decompression than lzma
+with good ratios, and far better than bzip2/gzip at every speed point.
+Files using -Z require this version or later to decompress.
+LZMA levels are no longer rescaled: -L maps directly onto the lzma level
+scale with explicit large dictionaries sized to ram, and -L9 uses 273 fast
+bytes like xz -9e for maximum compression.
+Verified zpaq classic context mixing levels still beat the newer libzpaq
+archiver methods for ratio; no change to the -z path.
 Update embedded libzpaq from 5.00 to 7.15 - faster & better compression.
 Update embedded LZMA SDK from ~4.63/9.x to 26.02 - faster & better compression.
 Default -e encryption is AES-256-GCM + PBKDF2-HMAC-SHA512 (magic[22]=3).

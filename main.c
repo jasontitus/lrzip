@@ -114,14 +114,15 @@ static void usage(bool compat)
 	print_output("	-l, --lzo		lzo compression (ultra fast)\n");
 	print_output("	-n, --no-compress	no backend compression - prepare for other compressor\n");
 	print_output("	-z, --zpaq		zpaq compression (best, extreme compression, extremely slow)\n");
+	print_output("	-Z, --zstd		zstd compression (modern, fast, good compression)\n");
 	print_output("Low level options:\n");
 	if (compat) {
-		print_output("	-1 .. -9		set lzma/bzip2/gzip compression level (1-9, default 7)\n");
+		print_output("	-1 .. -9		set lzma/bzip2/gzip/zstd compression level (1-9, default 7)\n");
 		print_output("	--fast			alias for -1\n");
 		print_output("	--best			alias for -9\n");
 	}
 	if (!compat)
-		print_output("	-L, --level level	set lzma/bzip2/gzip compression level (1-9, default 7)\n");
+		print_output("	-L, --level level	set lzma/bzip2/gzip/zstd compression level (1-9, default 7)\n");
 	print_output("	-N, --nice-level value	Set nice value to value (default %d)\n", compat ? 0 : 19);
 	print_output("	-p, --threads value	Set processor count to override number of threads\n");
 	print_output("	-m, --maxram size	Set maximum available ram in hundreds of MB\n");
@@ -199,6 +200,8 @@ static void show_summary(void)
 				print_verbose("GZIP\n");
 			else if (ZPAQ_COMPRESS)
 				print_verbose("ZPAQ. LZ4 Compressibility testing %s\n", (LZ4_TEST? "enabled" : "disabled"));
+			else if (ZSTD_COMPRESS)
+				print_verbose("ZSTD. LZ4 Compressibility testing %s\n", (LZ4_TEST? "enabled" : "disabled"));
 			else if (NO_COMPRESS)
 				print_verbose("RZIP pre-processing only\n");
 			if (control->window)
@@ -261,6 +264,7 @@ static struct option long_options[] = {
 	{"version",	no_argument,	0,	'V'},
 	{"window",	required_argument,	0,	'w'},  /* 30 */
 	{"zpaq",	no_argument,	0,	'z'},
+	{"zstd",	no_argument,	0,	'Z'},
 	{"fast",	no_argument,	0,	'1'},
 	{"best",	no_argument,	0,	'9'},
 	{0,	0,	0,	0},
@@ -306,8 +310,8 @@ static void recurse_dirlist(char *indir, char **dirlist, int *entries)
 	closedir(dirp);
 }
 
-static const char *loptions = "bcCdDefghHiKlL:nN:o:O:p:PqQrS:tTUm:vVw:z?";
-static const char *coptions = "bcCdefghHikKlLnN:o:O:p:PrS:tTUm:vVw:z?123456789";
+static const char *loptions = "bcCdDefghHiKlL:nN:o:O:p:PqQrS:tTUm:vVw:zZ?";
+static const char *coptions = "bcCdefghHikKlLnN:o:O:p:PrS:tTUm:vVw:zZ?123456789";
 
 int main(int argc, char *argv[])
 {
@@ -369,11 +373,12 @@ int main(int argc, char *argv[])
 		case 'l':
 		case 'n':
 		case 'z':
+		case 'Z':
 			/* If some compression was chosen in lrzip.conf, allow this one time
 			 * because conf_file_compression_set will be true
 			 */
 			if ((control->flags & FLAG_NOT_LZMA) && conf_file_compression_set == false)
-				failure("Can only use one of -l, -b, -g, -z or -n\n");
+				failure("Can only use one of -l, -b, -g, -z, -Z or -n\n");
 			/* Select Compression Mode */
 			control->flags &= ~FLAG_NOT_LZMA; /* must clear all compressions first */
 			if (c == 'b')
@@ -386,6 +391,8 @@ int main(int argc, char *argv[])
 				control->flags |= FLAG_NO_COMPRESS;
 			else if (c == 'z')
 				control->flags |= FLAG_ZPAQ_COMPRESS;
+			else if (c == 'Z')
+				control->flags |= FLAG_ZSTD_COMPRESS;
 			/* now FLAG_NOT_LZMA will evaluate as true */
 			conf_file_compression_set = false;
 			break;

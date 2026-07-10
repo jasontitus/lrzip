@@ -61,8 +61,9 @@ Options affecting compression:
  \-l, \-\-lzo               lzo compression (ultra fast)
  \-n, \-\-no-compress       no backend compression - prepare for other compressor
  \-z, \-\-zpaq              zpaq compression (best, extreme compression, extremely slow)
+ \-Z, \-\-zstd              zstd compression (modern, fast, good compression)
 Low level options:
- \-L, \-\-level level       set lzma/bzip2/gzip compression level (1-9, default 7)
+ \-L, \-\-level level       set lzma/bzip2/gzip/zstd compression level (1-9, default 7)
  \-N, \-\-nice-level value  Set nice value to value (default 19)
  \-p, \-\-threads value     Set processor count to override number of threads
  \-m, \-\-maxram size       Set maximum available ram in hundreds of MB
@@ -224,6 +225,15 @@ ZPAQ compression. Uses ZPAQ compression which is from the PAQ family of
 compressors known for having some of the highest compression ratios possible
 but at the cost of being extremely slow on both compress and decompress (4x
 slower than lzma which is the default).
+.IP
+.IP "\fB-Z\fP"
+ZSTD compression. Uses Zstandard, a modern compressor combining LZ77 style
+matching with finite state entropy coding. Long distance matching over a
+large window is enabled, complementing rzip's first stage. Compared to the
+default lzma it compresses somewhat less but decompresses many times
+faster, and at low levels (\-L 1\&.\&.5) it is far faster than bzip2 or
+gzip for similar or better compression. The lrzip levels 1\-9 map onto the
+zstd levels 1\-22.
 .IP
 .PP
 .SH "Low level options"

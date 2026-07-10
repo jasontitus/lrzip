@@ -246,6 +246,7 @@ typedef sem_t cksem_t;
 #define FLAG_ENCRYPT_LEGACY	(1 << 26)
 /* Session uses AES-256-GCM suite (magic[22]=3) */
 #define FLAG_ENCRYPT_AEAD	(1 << 27)
+#define FLAG_ZSTD_COMPRESS	(1 << 28)
 
 #define MAGIC_LEN	24
 #define LRZC_LEN	24
@@ -268,6 +269,7 @@ typedef sem_t cksem_t;
 #define CTYPE_LZMA 6
 #define CTYPE_GZIP 7
 #define CTYPE_ZPAQ 8
+#define CTYPE_ZSTD 9
 
 #define PASS_LEN 512
 #define HASH_LEN 64
@@ -300,7 +302,7 @@ typedef sem_t cksem_t;
 #define ARBITRARY_AT_EPOCH (ARBITRARY * pow (MOORE_TIMES_PER_SECOND, -T_ZERO))
 
 #define FLAG_VERBOSE (FLAG_VERBOSITY | FLAG_VERBOSITY_MAX)
-#define FLAG_NOT_LZMA (FLAG_NO_COMPRESS | FLAG_LZO_COMPRESS | FLAG_BZIP2_COMPRESS | FLAG_ZLIB_COMPRESS | FLAG_ZPAQ_COMPRESS)
+#define FLAG_NOT_LZMA (FLAG_NO_COMPRESS | FLAG_LZO_COMPRESS | FLAG_BZIP2_COMPRESS | FLAG_ZLIB_COMPRESS | FLAG_ZPAQ_COMPRESS | FLAG_ZSTD_COMPRESS)
 #define LZMA_COMPRESS	(!(control->flags & FLAG_NOT_LZMA))
 
 #define SHOW_PROGRESS	(control->flags & FLAG_SHOW_PROGRESS)
@@ -313,6 +315,7 @@ typedef sem_t cksem_t;
 #define BZIP2_COMPRESS	(control->flags & FLAG_BZIP2_COMPRESS)
 #define ZLIB_COMPRESS	(control->flags & FLAG_ZLIB_COMPRESS)
 #define ZPAQ_COMPRESS	(control->flags & FLAG_ZPAQ_COMPRESS)
+#define ZSTD_COMPRESS	(control->flags & FLAG_ZSTD_COMPRESS)
 #define VERBOSE		(control->flags & FLAG_VERBOSE)
 #define VERBOSITY	(control->flags & FLAG_VERBOSITY)
 #define MAX_VERBOSE	(control->flags & FLAG_VERBOSITY_MAX)
@@ -460,6 +463,9 @@ struct rzip_control {
 	i64 usable_ram; // the most ram we'll try to use on one activity
 	i64 maxram; // the largest chunk of ram to allocate
 	unsigned char lzma_properties[5]; // lzma properties, encoded
+	u32 lzma_dictsize; // lzma dictionary size, sized to ram and level
+	int zstd_level; // mapped zstd compression level
+	int zstd_wlog; // zstd window log2, sized to level
 	i64 window;
 	unsigned long flags;
 	i64 ramsize;
