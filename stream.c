@@ -299,28 +299,163 @@ static int gzip_compress_buf(rzip_control *control, struct compress_thread *cthr
 	return 0;
 }
 
+/* Filter kinds shared by the lzma and zstd back ends. The kind is the
+ * offset from the back end's first filtered ctype, so
+ * ctype = CTYPE_LZMA_BCJ + kind or CTYPE_ZSTD_BCJ + kind. */
+#define FILTER_NONE (-1)
+#define FILTER_X86 0
+#define FILTER_ARM64 1
+#define FILTER_DELTA1 2
+#define FILTER_DELTA4 5
+#define FILTER_KINDS 6
+
+/* Map a block ctype back to its filter kind, or FILTER_NONE */
+static int ctype_filter_kind(int ctype)
+{
+	if (ctype >= CTYPE_LZMA_BCJ && ctype <= CTYPE_LZMA_DELTA4)
+		return ctype - CTYPE_LZMA_BCJ;
+	if (ctype >= CTYPE_ZSTD_BCJ && ctype <= CTYPE_ZSTD_DELTA4)
+		return ctype - CTYPE_ZSTD_BCJ;
+	return FILTER_NONE;
+}
+
+/* Apply or reverse a prefilter in place. The branch converters make
+ * relative call/jump targets absolute so repeated calls to the same
+ * function compress; delta subtracts the byte N before, turning slowly
+ * changing sampled data into small values. All are exact inverses of
+ * themselves at the same parameters. */
+static void filter_convert(uchar *buf, i64 len, int kind, bool encode)
+{
+	Byte delta_state[DELTA_STATE_SIZE];
+	u32 conv_state;
+
+	switch (kind) {
+	case FILTER_X86:
+		conv_state = Z7_BRANCH_CONV_ST_X86_STATE_INIT_VAL;
+		if (encode)
+			z7_BranchConvSt_X86_Enc(buf, (SizeT)len, 0, &conv_state);
+		else
+			z7_BranchConvSt_X86_Dec(buf, (SizeT)len, 0, &conv_state);
+		break;
+	case FILTER_ARM64:
+		if (encode)
+			z7_BranchConv_ARM64_Enc(buf, (SizeT)len, 0);
+		else
+			z7_BranchConv_ARM64_Dec(buf, (SizeT)len, 0);
+		break;
+	case FILTER_DELTA1 ... FILTER_DELTA4:
+		Delta_Init(delta_state);
+		if (encode)
+			Delta_Encode(delta_state, kind - FILTER_DELTA1 + 1, buf, (SizeT)len);
+		else
+			Delta_Decode(delta_state, kind - FILTER_DELTA1 + 1, buf, (SizeT)len);
+		break;
+	}
+}
+
+/* Pick the prefilter that most helps this block, or CTYPE_LZMA for none.
+ * A 2MB sample from the middle of the block is trial compressed with fast
+ * settings plain and after each candidate conversion; a candidate must
+ * beat plain by a real margin so borderline data stays unfiltered.
+ *
+ * Note the filters see rzip's literal stream, not raw file data. The byte
+ * oriented x86 converter and delta survive that fine, but rzip matches
+ * shift the 4 byte instruction phase that the arm64 converter needs, so
+ * arm64 typically only wins on chunks where rzip found little to remove
+ * (verified against xz --arm64 which gains 4% on raw aarch64 binaries
+ * that gain nothing post rzip). The trial keeps such blocks unfiltered
+ * automatically. */
+static int pick_filter_kind(rzip_control *control, uchar *s_buf, i64 s_len)
+{
+	unsigned char props[5];
+	size_t prop_size = 5, plain_len, best_len, trial_len, sample;
+	int best = FILTER_NONE, ret;
+	i64 sample_ofs;
+	uchar *pristine, *copy, *out;
+	int i;
+
+	if (s_len < (1 << 20))
+		return FILTER_NONE;	/* not worth the trials on small blocks */
+	sample = MIN((size_t)s_len, (size_t)(1 << 21));
+
+	pristine = malloc(sample);
+	copy = malloc(sample);
+	out = malloc(sample);
+	if (unlikely(!pristine || !copy || !out))
+		goto out;
+
+	/* Sample from the middle of the block away from headers, 4 byte
+	 * aligned so the arm64 trial sees the same word phase as the full
+	 * block conversion. */
+	sample_ofs = ((s_len - (i64)sample) / 2) & ~(i64)3;
+	memcpy(pristine, s_buf + sample_ofs, sample);
+
+	plain_len = sample;
+	ret = LzmaCompress(out, &plain_len, pristine, sample, props, &prop_size,
+			   1, 1 << 20, -1, -1, -1, -1, 1);
+	if (ret != SZ_OK && ret != SZ_ERROR_OUTPUT_EOF)
+		goto out;
+
+	/* Candidates must win by at least this much versus plain */
+	best_len = plain_len - (plain_len / 64);
+
+	for (i = 0; i < FILTER_KINDS; i++) {
+		memcpy(copy, pristine, sample);
+		filter_convert(copy, sample, i, true);
+		trial_len = sample;
+		prop_size = 5;
+		ret = LzmaCompress(out, &trial_len, copy, sample, props, &prop_size,
+				   1, 1 << 20, -1, -1, -1, -1, 1);
+		if (ret != SZ_OK)
+			continue;
+		if (trial_len < best_len) {
+			best_len = trial_len;
+			best = i;
+		}
+	}
+	if (best != FILTER_NONE)
+		print_maxverbose("Filter trial: plain %zu filtered %zu, chose filter %d\n",
+				 plain_len, best_len, best);
+	else
+		print_maxverbose("Filter trial: plain %zu, no filter\n", plain_len);
+out:
+	dealloc(pristine);
+	dealloc(copy);
+	dealloc(out);
+	return best;
+}
+
 static int zstd_compress_buf(rzip_control *control, struct compress_thread *cthread)
 {
 	size_t dlen, zstd_ret;
 	ZSTD_CCtx *cctx;
+	int filter;
 	uchar *c_buf;
 
 	if (!lz4_compresses(control, cthread->s_buf, cthread->s_len))
 		return 0;
 
 	print_maxverbose("Starting zstd back end compression thread...\n");
+
+	/* Convert in place with the best prefilter for this block, if any;
+	 * incompressible or failed blocks are converted back before
+	 * returning. */
+	filter = pick_filter_kind(control, cthread->s_buf, cthread->s_len);
+	if (filter != FILTER_NONE)
+		filter_convert(cthread->s_buf, cthread->s_len, filter, true);
+
 	dlen = round_up_page(control, cthread->s_len);
 	c_buf = malloc(dlen);
 	if (!c_buf) {
 		print_err("Unable to allocate c_buf in zstd_compress_buf\n");
-		return -1;
+		goto restore_filter_err;
 	}
 
 	cctx = ZSTD_createCCtx();
 	if (unlikely(!cctx)) {
 		print_err("Unable to allocate compression context in zstd_compress_buf\n");
 		dealloc(c_buf);
-		return -1;
+		goto restore_filter_err;
 	}
 
 	ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, control->zstd_level);
@@ -346,140 +481,40 @@ static int zstd_compress_buf(rzip_control *control, struct compress_thread *cthr
 		if (ZSTD_getErrorCode(zstd_ret) == ZSTD_error_dstSize_tooSmall) {
 			/* Incompressible, leave as CTYPE_NONE */
 			print_maxverbose("Incompressible block\n");
-			return 0;
+			goto restore_filter_ok;
 		}
 		if (ZSTD_getErrorCode(zstd_ret) == ZSTD_error_memory_allocation) {
 			print_verbose("Unable to allocate enough RAM for zstd compression, falling back to bzip2 compression.\n");
+			if (filter != FILTER_NONE)
+				filter_convert(cthread->s_buf, cthread->s_len, filter, false);
 			return bzip2_compress_buf(control, cthread);
 		}
 		print_err("ZSTD compression failure: %s\n", ZSTD_getErrorName(zstd_ret));
-		return -1;
+		goto restore_filter_err;
 	}
 
 	if (unlikely((i64)zstd_ret >= cthread->c_len)) {
 		/* Incompressible, leave as CTYPE_NONE */
 		print_maxverbose("Incompressible block\n");
 		dealloc(c_buf);
-		return 0;
+		goto restore_filter_ok;
 	}
 
 	cthread->c_len = zstd_ret;
 	dealloc(cthread->s_buf);
 	cthread->s_buf = c_buf;
-	cthread->c_type = CTYPE_ZSTD;
+	cthread->c_type = filter == FILTER_NONE ? CTYPE_ZSTD : CTYPE_ZSTD_BCJ + filter;
 	return 0;
-}
 
-/* Apply or reverse one of the lzma prefilters in place. The branch
- * converters make relative call/jump targets absolute so repeated calls to
- * the same function compress; delta subtracts the byte N before, turning
- * slowly changing sampled data into small values. All are exact inverses
- * of themselves at the same parameters. */
-static void lzma_filter_convert(uchar *buf, i64 len, int ctype, bool encode)
-{
-	Byte delta_state[DELTA_STATE_SIZE];
-	u32 conv_state;
+restore_filter_ok:
+	if (filter != FILTER_NONE)
+		filter_convert(cthread->s_buf, cthread->s_len, filter, false);
+	return 0;
 
-	switch (ctype) {
-	case CTYPE_LZMA_BCJ:
-		conv_state = Z7_BRANCH_CONV_ST_X86_STATE_INIT_VAL;
-		if (encode)
-			z7_BranchConvSt_X86_Enc(buf, (SizeT)len, 0, &conv_state);
-		else
-			z7_BranchConvSt_X86_Dec(buf, (SizeT)len, 0, &conv_state);
-		break;
-	case CTYPE_LZMA_BCJ_ARM64:
-		if (encode)
-			z7_BranchConv_ARM64_Enc(buf, (SizeT)len, 0);
-		else
-			z7_BranchConv_ARM64_Dec(buf, (SizeT)len, 0);
-		break;
-	case CTYPE_LZMA_DELTA1:
-	case CTYPE_LZMA_DELTA2:
-	case CTYPE_LZMA_DELTA3:
-	case CTYPE_LZMA_DELTA4:
-		Delta_Init(delta_state);
-		if (encode)
-			Delta_Encode(delta_state, ctype - CTYPE_LZMA_DELTA1 + 1, buf, (SizeT)len);
-		else
-			Delta_Decode(delta_state, ctype - CTYPE_LZMA_DELTA1 + 1, buf, (SizeT)len);
-		break;
-	}
-}
-
-/* Pick the prefilter that most helps this block, or CTYPE_LZMA for none.
- * A 2MB sample from the middle of the block is trial compressed with fast
- * settings plain and after each candidate conversion; a candidate must
- * beat plain by a real margin so borderline data stays unfiltered.
- *
- * Note the filters see rzip's literal stream, not raw file data. The byte
- * oriented x86 converter and delta survive that fine, but rzip matches
- * shift the 4 byte instruction phase that the arm64 converter needs, so
- * arm64 typically only wins on chunks where rzip found little to remove
- * (verified against xz --arm64 which gains 4% on raw aarch64 binaries
- * that gain nothing post rzip). The trial keeps such blocks unfiltered
- * automatically. */
-static int lzma_pick_filter(rzip_control *control, uchar *s_buf, i64 s_len)
-{
-	static const int candidates[] = { CTYPE_LZMA_BCJ, CTYPE_LZMA_BCJ_ARM64,
-		CTYPE_LZMA_DELTA1, CTYPE_LZMA_DELTA2, CTYPE_LZMA_DELTA3,
-		CTYPE_LZMA_DELTA4 };
-	unsigned char props[5];
-	size_t prop_size = 5, plain_len, best_len, trial_len, sample;
-	int best = CTYPE_LZMA, ret;
-	i64 sample_ofs;
-	uchar *pristine, *copy, *out;
-	unsigned int i;
-
-	if (s_len < (1 << 20))
-		return CTYPE_LZMA;	/* not worth the trials on small blocks */
-	sample = MIN((size_t)s_len, (size_t)(1 << 21));
-
-	pristine = malloc(sample);
-	copy = malloc(sample);
-	out = malloc(sample);
-	if (unlikely(!pristine || !copy || !out))
-		goto out;
-
-	/* Sample from the middle of the block away from headers, 4 byte
-	 * aligned so the arm64 trial sees the same word phase as the full
-	 * block conversion. */
-	sample_ofs = ((s_len - (i64)sample) / 2) & ~(i64)3;
-	memcpy(pristine, s_buf + sample_ofs, sample);
-
-	plain_len = sample;
-	ret = LzmaCompress(out, &plain_len, pristine, sample, props, &prop_size,
-			   1, 1 << 20, -1, -1, -1, -1, 1);
-	if (ret != SZ_OK && ret != SZ_ERROR_OUTPUT_EOF)
-		goto out;
-
-	/* Candidates must win by at least this much versus plain */
-	best_len = plain_len - (plain_len / 64);
-
-	for (i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-		memcpy(copy, pristine, sample);
-		lzma_filter_convert(copy, sample, candidates[i], true);
-		trial_len = sample;
-		prop_size = 5;
-		ret = LzmaCompress(out, &trial_len, copy, sample, props, &prop_size,
-				   1, 1 << 20, -1, -1, -1, -1, 1);
-		if (ret != SZ_OK)
-			continue;
-		if (trial_len < best_len) {
-			best_len = trial_len;
-			best = candidates[i];
-		}
-	}
-	if (best != CTYPE_LZMA)
-		print_maxverbose("Filter trial: plain %zu filtered %zu, chose ctype %d\n",
-				 plain_len, best_len, best);
-	else
-		print_maxverbose("Filter trial: plain %zu, no filter\n", plain_len);
-out:
-	dealloc(pristine);
-	dealloc(copy);
-	dealloc(out);
-	return best;
+restore_filter_err:
+	if (filter != FILTER_NONE)
+		filter_convert(cthread->s_buf, cthread->s_len, filter, false);
+	return -1;
 }
 
 static int lzma_compress_buf(rzip_control *control, struct compress_thread *cthread)
@@ -498,9 +533,9 @@ static int lzma_compress_buf(rzip_control *control, struct compress_thread *cthr
 	/* Convert in place with the best prefilter for this block, if any;
 	 * incompressible or failed blocks are converted back before
 	 * returning. */
-	filter = lzma_pick_filter(control, cthread->s_buf, cthread->s_len);
-	if (filter != CTYPE_LZMA)
-		lzma_filter_convert(cthread->s_buf, cthread->s_len, filter, true);
+	filter = pick_filter_kind(control, cthread->s_buf, cthread->s_len);
+	if (filter != FILTER_NONE)
+		filter_convert(cthread->s_buf, cthread->s_len, filter, true);
 
 	/* Use the lzma level scale directly. The dictionary size is set
 	 * explicitly so the level only selects the match finder settings;
@@ -580,8 +615,8 @@ retry:
 			/* If lzma cannot allocate any dictionary, fall back to
 			 * bzip2 so the block does not remain uncompressed. */
 			print_verbose("Unable to allocate enough RAM for any sized compression window, falling back to bzip2 compression.\n");
-			if (filter != CTYPE_LZMA)
-				lzma_filter_convert(cthread->s_buf, cthread->s_len, filter, false);
+			if (filter != FILTER_NONE)
+				filter_convert(cthread->s_buf, cthread->s_len, filter, false);
 			return bzip2_compress_buf(control, cthread);
 		}
 		goto restore_bcj;
@@ -623,14 +658,14 @@ retry:
 	cthread->c_len = dlen;
 	dealloc(cthread->s_buf);
 	cthread->s_buf = c_buf;
-	cthread->c_type = filter;
+	cthread->c_type = filter == FILTER_NONE ? CTYPE_LZMA : CTYPE_LZMA_BCJ + filter;
 	return 0;
 
 restore_bcj:
 	/* Blocks left uncompressed (or handed to the error path) must hold
 	 * the original bytes, so undo any in place filter conversion. */
-	if (filter != CTYPE_LZMA)
-		lzma_filter_convert(cthread->s_buf, cthread->s_len, filter, false);
+	if (filter != FILTER_NONE)
+		filter_convert(cthread->s_buf, cthread->s_len, filter, false);
 	return lzma_ret == SZ_OK || lzma_ret == SZ_ERROR_OUTPUT_EOF ? 0 : -1;
 }
 
@@ -2168,7 +2203,19 @@ retry:
 			case CTYPE_LZMA_DELTA4:
 				ret = lzma_decompress_buf(control, uci);
 				if (!ret)
-					lzma_filter_convert(uci->s_buf, uci->u_len, uci->c_type, false);
+					filter_convert(uci->s_buf, uci->u_len,
+						       ctype_filter_kind(uci->c_type), false);
+				break;
+			case CTYPE_ZSTD_BCJ:
+			case CTYPE_ZSTD_BCJ_ARM64:
+			case CTYPE_ZSTD_DELTA1:
+			case CTYPE_ZSTD_DELTA2:
+			case CTYPE_ZSTD_DELTA3:
+			case CTYPE_ZSTD_DELTA4:
+				ret = zstd_decompress_buf(control, uci);
+				if (!ret)
+					filter_convert(uci->s_buf, uci->u_len,
+						       ctype_filter_kind(uci->c_type), false);
 				break;
 			case CTYPE_LZO:
 				ret = lzo_decompress_buf(control, uci);
@@ -2366,7 +2413,7 @@ fill_another:
 		     c_type != CTYPE_LZO && c_type != CTYPE_LZMA &&
 		     c_type != CTYPE_GZIP && c_type != CTYPE_ZPAQ &&
 		     c_type != CTYPE_ZSTD &&
-		     !(c_type >= CTYPE_LZMA_BCJ && c_type <= CTYPE_LZMA_DELTA4))) {
+		     !(c_type >= CTYPE_LZMA_BCJ && c_type <= CTYPE_ZSTD_DELTA4))) {
 		fatal_return(("Invalid compression type %d in stream block\n", c_type), -1);
 	}
 	if (unlikely(c_type == CTYPE_NONE && c_len != u_len)) {

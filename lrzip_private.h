@@ -279,6 +279,13 @@ typedef sem_t cksem_t;
 #define CTYPE_LZMA_DELTA2 13
 #define CTYPE_LZMA_DELTA3 14
 #define CTYPE_LZMA_DELTA4 15
+/* the same filters over the zstd back end */
+#define CTYPE_ZSTD_BCJ 16
+#define CTYPE_ZSTD_BCJ_ARM64 17
+#define CTYPE_ZSTD_DELTA1 18
+#define CTYPE_ZSTD_DELTA2 19
+#define CTYPE_ZSTD_DELTA3 20
+#define CTYPE_ZSTD_DELTA4 21
 
 #define PASS_LEN 512
 #define HASH_LEN 64
