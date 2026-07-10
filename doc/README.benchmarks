@@ -251,3 +251,25 @@ old code at the same levels. The trial detection correctly leaves text
 and already filtered blocks alone (measured zero effect on enwik9). The
 overlapped threading recovers a further 0.5% on lzma text compression at
 default settings with all cpus still busy.
+
+
+Third 2026 update: delta and arm64 prefilters
+
+The x86 BCJ hook was generalised into a per block filter trial covering
+x86 BCJ, arm64 BCJ and byte delta at distances 1 to 4. Results on the
+silesia corpus (lrzip defaults, old = before any 2026 changes):
+
+silesia mr (16 bit MRI imagery, 9970564 bytes)
+old lrzip	2785965		new lrzip	2653863	(-4.7%, delta 2)
+silesia x-ray (16 bit film scan, 8474240 bytes)
+old lrzip	4478406		new lrzip	4251066	(-5.1%, delta 2)
+silesia concatenated (212MB mixed corpus)
+old lrzip	51861249	new lrzip	51555345	(-0.6%)
+
+The trial selection correctly leaves sao, osdb, text and source
+unfiltered. The arm64 converter is included but rarely wins: rzip's
+literal stream shifts the 4 byte instruction phase it depends on, an
+architectural interaction verified against xz --arm64 (which gains 4%
+on the same aarch64 binaries raw). Blocks simply stay unfiltered, and
+relocatable .ko objects were confirmed not to benefit from arm64 BCJ
+even outside lrzip.
