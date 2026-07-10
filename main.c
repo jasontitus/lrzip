@@ -638,6 +638,15 @@ int main(int argc, char *argv[])
 	    !(DECOMPRESS || TEST_ONLY || INFO)) {
 		control->threads = 1;
 		print_verbose("Maximum compression level 9: using single block per stream\n");
+	} else if ((LZMA_COMPRESS || ZSTD_COMPRESS) && control->threads > 1 &&
+	    !threads_set && !(DECOMPRESS || TEST_ONLY || INFO)) {
+		/* lzma runs a second match finder thread and zstd two worker
+		 * threads per block, so half as many blocks still keeps every
+		 * cpu busy while the larger blocks compress several percent
+		 * smaller. -p restores one block per thread. */
+		control->threads = (control->threads + 1) / 2;
+		print_verbose("Using %d larger blocks with 2 threads each for better compression\n",
+			      control->threads);
 	}
 
 	setup_overhead(control);

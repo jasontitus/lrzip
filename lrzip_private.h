@@ -270,6 +270,8 @@ typedef sem_t cksem_t;
 #define CTYPE_GZIP 7
 #define CTYPE_ZPAQ 8
 #define CTYPE_ZSTD 9
+/* lzma with the x86 BCJ branch converter applied first */
+#define CTYPE_LZMA_BCJ 10
 
 #define PASS_LEN 512
 #define HASH_LEN 64

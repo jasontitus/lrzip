@@ -19,6 +19,8 @@ liblzma_la_SOURCES = \
 	7zCrcOpt.c \
 	Alloc.c \
 	Alloc.h \
+	Bra.h \
+	Bra86.c \
 	Compiler.h \
 	CpuArch.c \
 	CpuArch.h \

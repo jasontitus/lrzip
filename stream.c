@@ -64,6 +64,7 @@
 
 /* LZMA C Wrapper */
 #include "lzma/C/LzmaLib.h"
+#include "lzma/C/Bra.h"
 
 #include "util.h"
 #include "lrzip_core.h"
@@ -329,6 +330,12 @@ static int zstd_compress_buf(rzip_control *control, struct compress_thread *cthr
 	 * size internally so small blocks do not pay for this. */
 	ZSTD_CCtx_setParameter(cctx, ZSTD_c_enableLongDistanceMatching, 1);
 	ZSTD_CCtx_setParameter(cctx, ZSTD_c_windowLog, control->zstd_wlog);
+	/* Two workers per block pair with the halved block count from main;
+	 * jobs overlap by a full window so the ratio cost is minimal. Level
+	 * 9 is single block maximum compression, so stay single threaded
+	 * there. */
+	if (control->compression_level < 9)
+		ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, 2);
 
 	zstd_ret = ZSTD_compress2(cctx, c_buf, dlen, cthread->s_buf, (size_t)cthread->s_len);
 	ZSTD_freeCCtx(cctx);
@@ -362,17 +369,79 @@ static int zstd_compress_buf(rzip_control *control, struct compress_thread *cthr
 	return 0;
 }
 
+/* Decide whether the x86 BCJ branch converter helps this block. Branch
+ * converted executable code compresses several percent smaller, but the
+ * conversion actively hurts non-code data, so trial compress a sample from
+ * the middle of the block both ways with fast settings and compare. */
+static bool bcj_helps(rzip_control *control, uchar *s_buf, i64 s_len)
+{
+	unsigned char props[5];
+	size_t prop_size = 5, plain_len, conv_len, sample;
+	u32 conv_state = Z7_BRANCH_CONV_ST_X86_STATE_INIT_VAL;
+	uchar *copy, *out;
+	int ret;
+	bool helps = false;
+
+	if (s_len < (1 << 20))
+		return false;	/* not worth the trial on small blocks */
+	sample = MIN((size_t)s_len, (size_t)(1 << 22));
+
+	copy = malloc(sample);
+	out = malloc(sample);
+	if (unlikely(!copy || !out)) {
+		dealloc(copy);
+		dealloc(out);
+		return false;
+	}
+
+	/* Sample from the middle of the block, away from headers */
+	memcpy(copy, s_buf + (s_len - sample) / 2, sample);
+
+	plain_len = sample;
+	ret = LzmaCompress(out, &plain_len, copy, sample, props, &prop_size,
+			   1, 1 << 20, -1, -1, -1, -1, 1);
+	if (ret != SZ_OK && ret != SZ_ERROR_OUTPUT_EOF)
+		goto out;
+
+	z7_BranchConvSt_X86_Enc(copy, sample, 0, &conv_state);
+	conv_len = sample;
+	prop_size = 5;
+	ret = LzmaCompress(out, &conv_len, copy, sample, props, &prop_size,
+			   1, 1 << 20, -1, -1, -1, -1, 1);
+	if (ret != SZ_OK)
+		goto out;
+
+	/* Ask for a real margin so borderline data stays unfiltered */
+	helps = conv_len + (plain_len / 64) < plain_len;
+	print_maxverbose("BCJ trial: plain %zu vs converted %zu, filter %s\n",
+			 plain_len, conv_len, helps ? "on" : "off");
+out:
+	dealloc(copy);
+	dealloc(out);
+	return helps;
+}
+
 static int lzma_compress_buf(rzip_control *control, struct compress_thread *cthread)
 {
 	unsigned char lzma_properties[5]; /* lzma properties, encoded */
-	int lzma_level, lzma_fb, lzma_ret;
+	int lzma_level, lzma_fb, lzma_ret = SZ_ERROR_MEM;
 	size_t prop_size = 5; /* return value for lzma_properties */
 	u32 dictsize;
+	bool bcj = false;
 	uchar *c_buf;
 	size_t dlen;
 
 	if (!lz4_compresses(control, cthread->s_buf, cthread->s_len))
 		return 0;
+
+	if (bcj_helps(control, cthread->s_buf, cthread->s_len)) {
+		/* Convert in place; incompressible or failed blocks are
+		 * converted back before returning. */
+		u32 conv_state = Z7_BRANCH_CONV_ST_X86_STATE_INIT_VAL;
+
+		z7_BranchConvSt_X86_Enc(cthread->s_buf, (SizeT)cthread->s_len, 0, &conv_state);
+		bcj = true;
+	}
 
 	/* Use the lzma level scale directly. The dictionary size is set
 	 * explicitly so the level only selects the match finder settings;
@@ -397,7 +466,8 @@ retry:
 	c_buf = malloc(dlen);
 	if (!c_buf) {
 		print_err("Unable to allocate c_buf in lzma_compress_buf\n");
-		return -1;
+		lzma_ret = SZ_ERROR_MEM;
+		goto restore_bcj;
 	}
 
 	/* LZMA SDK 26.02 LzmaCompress: level + threads; props returned in
@@ -451,17 +521,21 @@ retry:
 			/* If lzma cannot allocate any dictionary, fall back to
 			 * bzip2 so the block does not remain uncompressed. */
 			print_verbose("Unable to allocate enough RAM for any sized compression window, falling back to bzip2 compression.\n");
+			if (bcj) {
+				u32 conv_state = Z7_BRANCH_CONV_ST_X86_STATE_INIT_VAL;
+
+				z7_BranchConvSt_X86_Dec(cthread->s_buf, (SizeT)cthread->s_len, 0, &conv_state);
+			}
 			return bzip2_compress_buf(control, cthread);
-		} else if (lzma_ret == SZ_ERROR_OUTPUT_EOF)
-			return 0;
-		return -1;
+		}
+		goto restore_bcj;
 	}
 
 	if (unlikely((i64)dlen >= cthread->c_len)) {
 		/* Incompressible, leave as CTYPE_NONE */
 		print_maxverbose("Incompressible block\n");
 		dealloc(c_buf);
-		return 0;
+		goto restore_bcj;
 	}
 
 	/* Make sure multiple threads don't race on writing lzma_properties.
@@ -493,8 +567,18 @@ retry:
 	cthread->c_len = dlen;
 	dealloc(cthread->s_buf);
 	cthread->s_buf = c_buf;
-	cthread->c_type = CTYPE_LZMA;
+	cthread->c_type = bcj ? CTYPE_LZMA_BCJ : CTYPE_LZMA;
 	return 0;
+
+restore_bcj:
+	/* Blocks left uncompressed (or handed to the error path) must hold
+	 * the original bytes, so undo any in place branch conversion. */
+	if (bcj) {
+		u32 conv_state = Z7_BRANCH_CONV_ST_X86_STATE_INIT_VAL;
+
+		z7_BranchConvSt_X86_Dec(cthread->s_buf, (SizeT)cthread->s_len, 0, &conv_state);
+	}
+	return lzma_ret == SZ_OK || lzma_ret == SZ_ERROR_OUTPUT_EOF ? 0 : -1;
 }
 
 static int lzo_compress_buf(rzip_control *control, struct compress_thread *cthread)
@@ -2023,6 +2107,14 @@ retry:
 			case CTYPE_LZMA:
 				ret = lzma_decompress_buf(control, uci);
 				break;
+			case CTYPE_LZMA_BCJ:
+				ret = lzma_decompress_buf(control, uci);
+				if (!ret) {
+					u32 conv_state = Z7_BRANCH_CONV_ST_X86_STATE_INIT_VAL;
+
+					z7_BranchConvSt_X86_Dec(uci->s_buf, (SizeT)uci->u_len, 0, &conv_state);
+				}
+				break;
 			case CTYPE_LZO:
 				ret = lzo_decompress_buf(control, uci);
 				break;
@@ -2218,7 +2310,7 @@ fill_another:
 	if (unlikely(c_type != CTYPE_NONE && c_type != CTYPE_BZIP2 &&
 		     c_type != CTYPE_LZO && c_type != CTYPE_LZMA &&
 		     c_type != CTYPE_GZIP && c_type != CTYPE_ZPAQ &&
-		     c_type != CTYPE_ZSTD)) {
+		     c_type != CTYPE_ZSTD && c_type != CTYPE_LZMA_BCJ)) {
 		fatal_return(("Invalid compression type %d in stream block\n", c_type), -1);
 	}
 	if (unlikely(c_type == CTYPE_NONE && c_len != u_len)) {

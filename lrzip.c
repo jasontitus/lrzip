@@ -1358,6 +1358,8 @@ next_chunk:
 				print_verbose("zpaq");
 			else if (ctype == CTYPE_ZSTD)
 				print_verbose("zstd");
+			else if (ctype == CTYPE_LZMA_BCJ)
+				print_verbose("lzma+bcj");
 			else
 				print_verbose("Dunno wtf");
 			if (save_ctype == 255)
@@ -1455,6 +1457,8 @@ done:
 		print_output("rzip + zpaq\n");
 	else if (save_ctype == CTYPE_ZSTD)
 		print_output("rzip + zstd\n");
+	else if (save_ctype == CTYPE_LZMA_BCJ)
+		print_output("rzip + lzma + x86 bcj\n");
 	else
 		print_output("Dunno wtf\n");
 

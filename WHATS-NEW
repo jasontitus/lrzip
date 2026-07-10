@@ -13,6 +13,13 @@ bytes like xz -9e for maximum compression.
 are compressed as one large block instead of one block per thread, since
 independently compressed blocks cost ratio (measured ~4% on lzma and ~6% on
 zpaq). Use -p to force threaded operation at level 9.
+Add automatic x86 BCJ branch conversion for lzma compression: blocks that
+trial detection identifies as executable code are branch converted before
+compression, several percent smaller on binaries. Archives using it need
+this version or later to decompress.
+Below level 9, lzma and zstd now compress half as many blocks per chunk,
+each twice as large, using two threads per block. All cpus stay busy while
+the larger blocks compress 1.5-2% smaller.
 Verified zpaq classic context mixing levels still beat the newer libzpaq
 archiver methods for ratio; no change to the -z path.
 Update embedded libzpaq from 5.00 to 7.15 - faster & better compression.
