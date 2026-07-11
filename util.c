@@ -131,8 +131,12 @@ void setup_overhead(rzip_control *control)
 		 * overhead for these sizes does not fit in usable ram. */
 		i64 dictsize = (level <= 4 ? (1 << (level * 2 + 16)) :
 				(level <= 6 ? (1 << (level + 20)) :
-				(level == 7 ? (1 << 26) :
-				(level == 8 ? (1 << 27) : ((i64)1 << 28)))));
+				(level == 7 ? (1 << 26) : (1 << 27))));
+
+		/* --ultra compresses whole streams as single blocks, so a
+		 * dictionary spanning more of the stream keeps paying off. */
+		if (ULTRA && level == 9)
+			dictsize = (i64)1 << 28;
 
 		/* The encoder needs ~11.5 times the dictionary per thread; cap
 		 * the dictionary so it fits the third of ram we will allow
@@ -278,6 +282,9 @@ bool read_config(rzip_control *control)
 		else if (isparameter(parameter, "unlimited")) {
 			if (isparameter(parametervalue, "yes"))
 				control->flags |= FLAG_UNLIMITED;
+		} else if (isparameter(parameter, "ultra")) {
+			if (isparameter(parametervalue, "yes"))
+				control->flags |= FLAG_ULTRA;
 		} else if (isparameter(parameter, "compressionlevel")) {
 			control->compression_level = atoi(parametervalue);
 			if ( control->compression_level < 1 || control->compression_level > 9 )

@@ -12,6 +12,9 @@
 # COMPRESSIONLEVEL = 7
 # Use -U setting, Unlimited ram. Yes or No
 # UNLIMITED = NO
+# Ultra maximum compression modifier: single block per stream, largest
+# dictionaries. Much slower, best ratio. Yes or No (-u, --ultra)
+# ULTRA = NO
 # Compression Method, rzip, gzip, bzip2, lzo, lzma (default), zpaq, or zstd. (-n -g -b -l --lzma -z -Z)
 # May be overridden by command line compression choice.
 # COMPRESSIONMETHOD = lzma

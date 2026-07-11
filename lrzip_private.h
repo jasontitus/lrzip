@@ -247,6 +247,9 @@ typedef sem_t cksem_t;
 /* Session uses AES-256-GCM suite (magic[22]=3) */
 #define FLAG_ENCRYPT_AEAD	(1 << 27)
 #define FLAG_ZSTD_COMPRESS	(1 << 28)
+/* Maximum compression modifier: single block per stream, largest
+ * dictionaries, 273 fast bytes. Sacrifices parallelism for ratio. */
+#define FLAG_ULTRA		(1 << 29)
 
 #define MAGIC_LEN	24
 #define LRZC_LEN	24
@@ -332,6 +335,7 @@ typedef sem_t cksem_t;
 #define ZLIB_COMPRESS	(control->flags & FLAG_ZLIB_COMPRESS)
 #define ZPAQ_COMPRESS	(control->flags & FLAG_ZPAQ_COMPRESS)
 #define ZSTD_COMPRESS	(control->flags & FLAG_ZSTD_COMPRESS)
+#define ULTRA		(control->flags & FLAG_ULTRA)
 #define VERBOSE		(control->flags & FLAG_VERBOSE)
 #define VERBOSITY	(control->flags & FLAG_VERBOSITY)
 #define MAX_VERBOSE	(control->flags & FLAG_VERBOSITY_MAX)

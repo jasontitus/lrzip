@@ -309,3 +309,10 @@ Overall versus the original code at the same level, archives of x86
 binaries are now 4.3% smaller at the default level and 6.4% smaller at
 -L9; wikipedia text 3.0% / 4.1%; kernel source 2.9% / 2.0%; aarch64
 binaries 3.2%; 16 bit imagery ~5%.
+
+
+Note: the single block maximum compression mode benchmarked above as
+"-L9" was subsequently moved behind the -u / --ultra modifier so that
+all numeric levels keep their threaded speed. The -L9 results in the
+2026 tables correspond to "-L9 --ultra" in the final interface; -L9
+alone now behaves like the threaded levels (128MB dictionary, fb 64).

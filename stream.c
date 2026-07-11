@@ -350,10 +350,10 @@ static int zstd_compress_buf(rzip_control *control, struct compress_thread *cthr
 	ZSTD_CCtx_setParameter(cctx, ZSTD_c_enableLongDistanceMatching, 1);
 	ZSTD_CCtx_setParameter(cctx, ZSTD_c_windowLog, control->zstd_wlog);
 	/* Two workers per block pair with the halved block count from main;
-	 * jobs overlap by a full window so the ratio cost is minimal. Level
-	 * 9 is single block maximum compression, so stay single threaded
-	 * there. */
-	if (control->compression_level < 9)
+	 * jobs overlap by a full window so the ratio cost is minimal.
+	 * --ultra is single block maximum compression, so stay single
+	 * threaded there. */
+	if (!ULTRA)
 		ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, 2);
 
 	zstd_ret = ZSTD_compress2(cctx, c_buf, dlen, cthread->s_buf, (size_t)cthread->s_len);
@@ -423,14 +423,14 @@ static int lzma_compress_buf(rzip_control *control, struct compress_thread *cthr
 
 	/* Use the lzma level scale directly. The dictionary size is set
 	 * explicitly so the level only selects the match finder settings;
-	 * levels 7+ use 64 fast bytes, and 9 uses 273 like xz -9e for
+	 * levels 7+ use 64 fast bytes, and --ultra uses 273 like xz -e for
 	 * maximum ratio. */
 	lzma_level = control->compression_level;
 	if (!lzma_level)
 		lzma_level = 1;
 	else if (lzma_level > 9)
 		lzma_level = 9;
-	lzma_fb = (lzma_level == 9 ? 273 : -1);
+	lzma_fb = (ULTRA ? 273 : -1);
 
 	print_maxverbose("Starting lzma back end compression thread...\n");
 retry:
@@ -457,8 +457,8 @@ retry:
 				lzma_level,
 				dictsize, /* dict size scaled to level and ram */
 				-1, -1, -1, lzma_fb, /* lc, lp, pb, fb */
-				control->threads > 1 || control->compression_level == 9 ? 2 : 1);
-				/* level 9 packs whole streams into single blocks, so
+				control->threads > 1 || ULTRA ? 2 : 1);
+				/* ultra packs whole streams into single blocks, so
 				 * keep the encoder's match finder thread. */
 				/* LZMA spec has threads = 1 or 2 only. */
 	if (lzma_ret != SZ_OK) {

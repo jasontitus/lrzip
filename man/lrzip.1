@@ -69,6 +69,8 @@ Low level options:
  \-m, \-\-maxram size       Set maximum available ram in hundreds of MB
                          overrides detected amount of available ram
  \-T, \-\-threshold         Disable LZ4 compressibility testing
+ \-u, \-\-ultra             Maximum compression modifier: single block per stream,
+                         largest dictionaries. Much slower, best possible ratio
  \-U, \-\-unlimited         Use unlimited window size beyond ramsize (potentially much slower)
  \-w, \-\-window size       maximum compression window in hundreds of MB
                          default chosen by heuristic dependent on ram and chosen compression
@@ -257,12 +259,15 @@ range duplicate content before and after conversion and refuses the filter
 when conversion would break existing duplicates, so archives that rely on
 rzip deduplicating repeated binaries are unaffected.
 .IP
-Level 9 is a maximum compression mode for the lzma, zpaq and zstd back ends:
-each stream is compressed as one large block with a dictionary sized to ram
+.IP "\fB-u --ultra\fP"
+Maximum compression modifier for the lzma, zpaq and zstd back ends: each
+stream is compressed as one large block with a dictionary sized to ram
 instead of being split into one block per thread, and lzma uses 273 fast
-bytes like xz \-9e. This gives the best possible ratio but sacrifices
-parallelism, so it is several times slower on multicore machines. Specifying
-\-p explicitly restores threaded operation at level 9.
+bytes like xz \-e. Combine with \-L9 for the best possible ratio. This
+sacrifices parallelism, so it is several times slower on multicore
+machines both compressing and decompressing. Specifying \-p explicitly
+restores threaded operation. Without \-\-ultra all levels including 9 keep
+threaded operation and their usual speed.
 .IP
 .IP "\fB-N value\fP"
 The default nice value is 19. This option can be used to set the priority
