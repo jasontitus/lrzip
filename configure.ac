@@ -127,8 +127,12 @@ AC_CHECK_LIB(lzo2, lzo1x_1_compress, ,
         AC_MSG_ERROR([Could not find lzo2 library - please install liblzo2-dev]))
 AC_CHECK_LIB(lz4, LZ4_compress_default, ,
 	AC_MSG_ERROR([Could not find lz4 library - please install liblz4-dev]))
-AC_CHECK_LIB(zstd, ZSTD_compress2, ,
-	AC_MSG_ERROR([Could not find zstd library - please install libzstd-dev]))
+AC_ARG_WITH([zstd],
+	AS_HELP_STRING([--without-zstd], [build without the zstd back end]),
+	[], [with_zstd=yes])
+AS_IF([test "x$with_zstd" != "xno"],
+	[AC_CHECK_LIB(zstd, ZSTD_compress2, ,
+		AC_MSG_ERROR([Could not find zstd library - please install libzstd-dev or use --without-zstd]))])
 
 AC_CHECK_FUNCS(mmap strerror)
 AC_CHECK_FUNCS(getopt_long)

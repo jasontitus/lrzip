@@ -159,6 +159,7 @@ void setup_overhead(rzip_control *control)
 		else
 			control->overhead = 112 * 1024 * 1024;
 	}
+#ifdef HAVE_LIBZSTD
 	else if (ZSTD_COMPRESS) {
 		/* Map lrzip levels 1-9 onto the zstd scale, biased towards the
 		 * strong end since rzip has already taken out the long range
@@ -182,6 +183,7 @@ void setup_overhead(rzip_control *control)
 			(control->zstd_level >= 20 ? 16 : 4) +
 			(64 * 1024 * 1024);
 	}
+#endif
 }
 
 void setup_ram(rzip_control *control)
@@ -304,7 +306,11 @@ bool read_config(rzip_control *control)
 			else if (isparameter(parametervalue, "zpaq"))
 				control->flags |= FLAG_ZPAQ_COMPRESS;
 			else if (isparameter(parametervalue, "zstd"))
+#ifdef HAVE_LIBZSTD
 				control->flags |= FLAG_ZSTD_COMPRESS;
+#else
+				failure_return(("CONF.FILE error. This build has no zstd support\n"), false);
+#endif
 			else if (!isparameter(parametervalue, "lzma")) /* oops, not lzma! */
 				failure_return(("CONF.FILE error. Invalid compression method %s specified\n",parametervalue), false);
 		} else if (isparameter(parameter, "lzotest")) {

@@ -114,7 +114,9 @@ static void usage(bool compat)
 	print_output("	-l, --lzo		lzo compression (ultra fast)\n");
 	print_output("	-n, --no-compress	no backend compression - prepare for other compressor\n");
 	print_output("	-z, --zpaq		zpaq compression (best, extreme compression, extremely slow)\n");
+#ifdef HAVE_LIBZSTD
 	print_output("	-Z, --zstd		zstd compression (modern, fast, good compression)\n");
+#endif
 	print_output("Low level options:\n");
 	if (compat) {
 		print_output("	-1 .. -9		set lzma/bzip2/gzip/zstd compression level (1-9, default 7)\n");
@@ -397,7 +399,11 @@ int main(int argc, char *argv[])
 			else if (c == 'z')
 				control->flags |= FLAG_ZPAQ_COMPRESS;
 			else if (c == 'Z')
+#ifdef HAVE_LIBZSTD
 				control->flags |= FLAG_ZSTD_COMPRESS;
+#else
+				failure("This build has no zstd support\n");
+#endif
 			/* now FLAG_NOT_LZMA will evaluate as true */
 			conf_file_compression_set = false;
 			break;

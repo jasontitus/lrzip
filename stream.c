@@ -44,8 +44,10 @@
 #include <lzo/lzoconf.h>
 #include <lzo/lzo1x.h>
 #include <lz4.h>
-#include <zstd.h>
-#include <zstd_errors.h>
+#ifdef HAVE_LIBZSTD
+# include <zstd.h>
+# include <zstd_errors.h>
+#endif
 #ifdef HAVE_ERRNO_H
 # include <errno.h>
 #endif
@@ -308,6 +310,7 @@ static int ctype_filter_kind(int ctype)
 	return LRZ_FILTER_NONE;
 }
 
+#ifdef HAVE_LIBZSTD
 static int zstd_compress_buf(rzip_control *control, struct compress_thread *cthread)
 {
 	size_t dlen, zstd_ret;
@@ -400,6 +403,7 @@ restore_filter_err:
 		lrz_filter_convert_mem(cthread->s_buf, cthread->s_len, filter, false);
 	return -1;
 }
+#endif
 
 static int lzma_compress_buf(rzip_control *control, struct compress_thread *cthread)
 {
@@ -673,6 +677,7 @@ out:
 	return ret;
 }
 
+#ifdef HAVE_LIBZSTD
 static int zstd_decompress_buf(rzip_control *control __UNUSED__, struct uncomp_thread *ucthread)
 {
 	size_t dlen = ucthread->u_len;
@@ -719,6 +724,7 @@ out:
 	}
 	return ret;
 }
+#endif
 
 static int gzip_decompress_buf(rzip_control *control __UNUSED__, struct uncomp_thread *ucthread)
 {
@@ -1747,8 +1753,10 @@ retry:
 			ret = gzip_compress_buf(control, cti);
 		else if (ZPAQ_COMPRESS)
 			ret = zpaq_compress_buf(control, cti, i);
+#ifdef HAVE_LIBZSTD
 		else if (ZSTD_COMPRESS)
 			ret = zstd_compress_buf(control, cti);
+#endif
 		else {
 			fatal_msg = "Dunno wtf compression to use!\n";
 			goto out;
@@ -2095,17 +2103,6 @@ retry:
 					lrz_filter_convert_mem(uci->s_buf, uci->u_len,
 							       ctype_filter_kind(uci->c_type), false);
 				break;
-			case CTYPE_ZSTD_BCJ:
-			case CTYPE_ZSTD_BCJ_ARM64:
-			case CTYPE_ZSTD_DELTA1:
-			case CTYPE_ZSTD_DELTA2:
-			case CTYPE_ZSTD_DELTA3:
-			case CTYPE_ZSTD_DELTA4:
-				ret = zstd_decompress_buf(control, uci);
-				if (!ret)
-					lrz_filter_convert_mem(uci->s_buf, uci->u_len,
-							       ctype_filter_kind(uci->c_type), false);
-				break;
 			case CTYPE_LZO:
 				ret = lzo_decompress_buf(control, uci);
 				break;
@@ -2118,9 +2115,32 @@ retry:
 			case CTYPE_ZPAQ:
 				ret = zpaq_decompress_buf(control, uci, i);
 				break;
+#ifdef HAVE_LIBZSTD
 			case CTYPE_ZSTD:
 				ret = zstd_decompress_buf(control, uci);
 				break;
+			case CTYPE_ZSTD_BCJ:
+			case CTYPE_ZSTD_BCJ_ARM64:
+			case CTYPE_ZSTD_DELTA1:
+			case CTYPE_ZSTD_DELTA2:
+			case CTYPE_ZSTD_DELTA3:
+			case CTYPE_ZSTD_DELTA4:
+				ret = zstd_decompress_buf(control, uci);
+				if (!ret)
+					lrz_filter_convert_mem(uci->s_buf, uci->u_len,
+							       ctype_filter_kind(uci->c_type), false);
+				break;
+#else
+			case CTYPE_ZSTD:
+			case CTYPE_ZSTD_BCJ:
+			case CTYPE_ZSTD_BCJ_ARM64:
+			case CTYPE_ZSTD_DELTA1:
+			case CTYPE_ZSTD_DELTA2:
+			case CTYPE_ZSTD_DELTA3:
+			case CTYPE_ZSTD_DELTA4:
+				failure_return(("Archive uses zstd but this build has no zstd support\n"), NULL);
+				break;
+#endif
 			default:
 				failure_return(("Dunno wtf decompression type to use!\n"), NULL);
 				break;
