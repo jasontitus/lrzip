@@ -1222,7 +1222,7 @@ bool get_fileinfo(rzip_control *control)
 	i64 expected_size, infile_size, chunk_size = 0, chunk_total = 0;
 	int header_length, stream = 0, chunk = 0;
 	char *tmp, *infilecopy = NULL;
-	char chunk_byte = 0;
+	char chunk_byte = 0, chunk_filter = 0;
 	long double cratio;
 	uchar ctype = 0;
 	uchar save_ctype = 255;
@@ -1273,6 +1273,11 @@ bool get_fileinfo(rzip_control *control)
 			fatal_goto(("Failed to read chunk_byte in get_fileinfo\n"), error);
 		if (unlikely(chunk_byte < 1 || chunk_byte > 8))
 			fatal_goto(("Invalid chunk bytes %d\n", chunk_byte), error);
+		/* v0.8+: chunk prefilter byte */
+		if (control->major_version > 0 || control->minor_version >= 8) {
+			if (unlikely(read(fd_in, &chunk_filter, 1) != 1))
+				fatal_goto(("Failed to read chunk_filter in get_fileinfo\n"), error);
+		}
 		if (control->major_version == 0 && control->minor_version > 5) {
 			if (unlikely(read(fd_in, &control->eof, 1) != 1))
 				fatal_goto(("Failed to read eof in get_fileinfo\n"), error);
@@ -1293,8 +1298,11 @@ bool get_fileinfo(rzip_control *control)
 	} else if (control->major_version == 0 && control->minor_version == 5) {
 		ofs = 25;
 		header_length = 25;
-	} else {
+	} else if (control->major_version == 0 && control->minor_version < 8) {
 		ofs = 26 + chunk_byte;
+		header_length = 1 + (chunk_byte * 3);
+	} else {
+		ofs = 27 + chunk_byte;
 		header_length = 1 + (chunk_byte * 3);
 	}
 	if (control->major_version == 0 && control->minor_version < 6 &&
@@ -1308,6 +1316,8 @@ next_chunk:
 	print_verbose("Rzip chunk:       %d\n", ++chunk);
 	if (chunk_byte)
 		print_verbose("Chunk byte width: %d\n", chunk_byte);
+	if (chunk_filter)
+		print_verbose("Chunk prefilter:  %s\n", chunk_filter == 1 ? "x86 bcj" : "arm64 bcj");
 	if (chunk_size) {
 		chunk_total += chunk_size;
 		print_verbose("Chunk size:       %"PRId64"\n", chunk_size);
@@ -1356,6 +1366,20 @@ next_chunk:
 				print_verbose("gzip");
 			else if (ctype == CTYPE_ZPAQ)
 				print_verbose("zpaq");
+			else if (ctype == CTYPE_ZSTD)
+				print_verbose("zstd");
+			else if (ctype == CTYPE_LZMA_BCJ)
+				print_verbose("lzma+bcj");
+			else if (ctype == CTYPE_LZMA_BCJ_ARM64)
+				print_verbose("lzma+bcj-arm64");
+			else if (ctype >= CTYPE_LZMA_DELTA1 && ctype <= CTYPE_LZMA_DELTA4)
+				print_verbose("lzma+delta%d", ctype - CTYPE_LZMA_DELTA1 + 1);
+			else if (ctype == CTYPE_ZSTD_BCJ)
+				print_verbose("zstd+bcj");
+			else if (ctype == CTYPE_ZSTD_BCJ_ARM64)
+				print_verbose("zstd+bcj-arm64");
+			else if (ctype >= CTYPE_ZSTD_DELTA1 && ctype <= CTYPE_ZSTD_DELTA4)
+				print_verbose("zstd+delta%d", ctype - CTYPE_ZSTD_DELTA1 + 1);
 			else
 				print_verbose("Dunno wtf");
 			if (save_ctype == 255)
@@ -1395,6 +1419,12 @@ next_chunk:
 		if (unlikely(chunk_byte < 1 || chunk_byte > 8))
 			fatal_goto(("Invalid chunk bytes %d\n", chunk_byte), error);
 		ofs++;
+		/* v0.8+: chunk prefilter byte */
+		if (control->major_version > 0 || control->minor_version >= 8) {
+			if (unlikely(read(fd_in, &chunk_filter, 1) != 1))
+				fatal_goto(("Failed to read chunk_filter in get_fileinfo\n"), error);
+			ofs++;
+		}
 		if (control->major_version == 0 && control->minor_version > 5) {
 			if (unlikely(read(fd_in, &control->eof, 1) != 1))
 				fatal_goto(("Failed to read eof in get_fileinfo\n"), error);
@@ -1451,6 +1481,20 @@ done:
 		print_output("rzip + gzip\n");
 	else if (save_ctype == CTYPE_ZPAQ)
 		print_output("rzip + zpaq\n");
+	else if (save_ctype == CTYPE_ZSTD)
+		print_output("rzip + zstd\n");
+	else if (save_ctype == CTYPE_LZMA_BCJ)
+		print_output("rzip + lzma + x86 bcj\n");
+	else if (save_ctype == CTYPE_LZMA_BCJ_ARM64)
+		print_output("rzip + lzma + arm64 bcj\n");
+	else if (save_ctype >= CTYPE_LZMA_DELTA1 && save_ctype <= CTYPE_LZMA_DELTA4)
+		print_output("rzip + lzma + delta %d\n", save_ctype - CTYPE_LZMA_DELTA1 + 1);
+	else if (save_ctype == CTYPE_ZSTD_BCJ)
+		print_output("rzip + zstd + x86 bcj\n");
+	else if (save_ctype == CTYPE_ZSTD_BCJ_ARM64)
+		print_output("rzip + zstd + arm64 bcj\n");
+	else if (save_ctype >= CTYPE_ZSTD_DELTA1 && save_ctype <= CTYPE_ZSTD_DELTA4)
+		print_output("rzip + zstd + delta %d\n", save_ctype - CTYPE_ZSTD_DELTA1 + 1);
 	else
 		print_output("Dunno wtf\n");
 

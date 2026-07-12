@@ -1,7 +1,43 @@
+lrzip-0.8.0
+
+File format version 0.8: chunk headers carry a prefilter byte. 0.8 reads
+all older archives; older versions cannot read 0.8 archives.
+Executable code is now branch converted BEFORE the rzip stage on chunks
+where a duplicate-window probe shows it pays: x86 conversion creates long
+range duplicate code sequences that rzip then removes (several percent
+smaller archives of binaries), and arm64 code gains at the entropy level.
+The probe counts duplicate windows at content defined anchors before and
+after conversion, so archives relying on long range deduplication of
+repeated binaries are automatically left unfiltered.
+
 lrzip-0.7.0
 
 New file format mostly backward compatible except for streamed large STDIO
 compressed files and encrypted files.
+Add zstd (Zstandard) back end compression with -Z / --zstd, using long
+distance matching over large windows. Much faster decompression than lzma
+with good ratios, and far better than bzip2/gzip at every speed point.
+Files using -Z require this version or later to decompress.
+LZMA levels are no longer rescaled: -L maps directly onto the lzma level
+scale with explicit large dictionaries sized to ram, and -L9 uses 273 fast
+bytes like xz -9e for maximum compression.
+New -u / --ultra maximum compression modifier for lzma, zpaq and zstd:
+streams are compressed as one large block instead of one block per thread,
+since independently compressed blocks cost ratio (measured ~4% on lzma and
+~6% on zpaq), with the largest dictionaries and lzma 273 fast bytes.
+Combine with -L9 for the best possible ratio. All levels keep their usual
+threaded speed without --ultra; -p forces threading with it.
+Add automatic prefilters for lzma and zstd compression, chosen per block by trial:
+x86 BCJ branch conversion for executable code (several percent smaller on
+binaries), arm64 BCJ, and byte delta with distance 1-4 for sampled or
+tabular data (~5% smaller on 16 bit medical imagery). Blocks where no
+filter clearly wins are stored unfiltered. Archives using a filter need
+this version or later to decompress.
+Below level 9, lzma and zstd now compress half as many blocks per chunk,
+each twice as large, using two threads per block. All cpus stay busy while
+the larger blocks compress 1.5-2% smaller.
+Verified zpaq classic context mixing levels still beat the newer libzpaq
+archiver methods for ratio; no change to the -z path.
 Update embedded libzpaq from 5.00 to 7.15 - faster & better compression.
 Update embedded LZMA SDK from ~4.63/9.x to 26.02 - faster & better compression.
 Default -e encryption is AES-256-GCM + PBKDF2-HMAC-SHA512 (magic[22]=3).

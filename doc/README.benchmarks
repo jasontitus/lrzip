@@ -152,3 +152,167 @@ happy as lzma gives good results. :D
 
 Con Kolivas
 Saturday, 7th July 2012
+
+
+===============================================================================
+
+2026 update: zstd back end, retuned lzma levels and -L9 maximum compression
+
+Benchmarks performed on a 4 core cloud VM with 15GB ram using lrzip v0.7.0,
+comparing the previous code ("old") against the new zstd back end, the
+directly mapped lzma levels, and the new single block maximum compression
+mode at level 9. Old means the tree before these changes, new means after.
+Decompress times are for testing/decompressing the archive on the same
+machine. All archives were verified byte for byte against the originals.
+
+enwik9 (1GB wikipedia XML text, http://mattmahoney.net/dc/textdata.html)
+
+Compression		Size		Percentage	Compress	Decompress
+None			1000000000	100
+old lrzip (default)	223870481	22.4		5m51s		0m13.0s
+new lrzip (default)	218336904	21.8		7m24s		0m11.5s
+old lrzip -L9		215572011	21.6		8m04s		0m11.8s
+new lrzip -L9		206816137	20.7		22m37s		0m22.2s
+new lrzip -Z -L5	259864944	26.0		1m49s		0m6.2s
+new lrzip -Z (default)	233724482	23.4		4m22s		0m8.5s
+new lrzip -Z -L9	217905597	21.8		23m18s		0m10.2s
+old lrzip -b (bzip2)	256033709	25.6		0m48s		0m18.3s
+
+linux-6.6.tar (1.35GB kernel source tarball)
+
+Compression		Size		Percentage	Compress	Decompress
+None			1419089920	100
+old lrzip (default)	145848085	10.3		2m54s		0m15.7s
+new lrzip (default)	142061741	10.0		3m52s		0m16.0s
+old lrzip -L9		140459734	9.9		4m07s		0m15.0s
+new lrzip -L9		137600072	9.7		12m04s		0m22.0s
+new lrzip -Z -L5	164990063	11.6		0m51s		0m7.6s
+new lrzip -Z (default)	149111016	10.5		3m20s		0m12.4s
+old lrzip -b (bzip2)	162986104	11.5		0m47s		0m22.4s
+
+200MB slice of enwik9 with zpaq
+
+Compression		Size		Percentage	Compress	Decompress
+None			200000000	100
+old lrzip -z -L9	40192703	20.1		3m18s		2m32s
+new lrzip -z -L9	39208132	19.6		9m21s		9m14s
+
+Notes. The new default lzma level mapping and larger dictionaries give
+around 2.5% smaller archives for both data sets at a modest time cost.
+The single block mode at -L9 gives the largest gains: 4.1% smaller than
+the old -L9 on wikipedia text and 2% on the kernel tree, 5.7-7.6% smaller
+than the old defaults, because splitting chunks into one independently
+compressed block per thread costs ratio (measured at ~4% for lzma and
+~6% for zpaq context mixing). Level 9 deliberately trades parallelism
+for ratio; -p restores threaded operation.
+
+The zstd back end occupies the space between bzip2 and lzma: at -L5 it
+matches bzip2's size on source code at the same compression speed while
+decompressing three times faster; at the default level it beats bzip2's
+size by 8-9% on both data sets; and at -L9 it approaches lzma sizes while
+still decompressing twice as fast as lzma. On highly textual data bzip2's
+BWT remains competitive with mid-level zstd for size, but its decompression
+is by far the slowest of the fast tier.
+
+zpaq remains the best ratio at extreme cost, and gains a further 2.5% at
+-L9 from single block mode. The classic context mixing models were
+re-verified against the newer libzpaq 7.15 archiver methods and remain
+superior for lrzip's use (see libzpaq/zpaq_lrzip.cpp).
+
+
+Second 2026 update: x86 BCJ prefilter and overlapped block threading
+
+Two further changes benchmarked on the same machine. Below level 9, lzma
+and zstd now compress half as many blocks per chunk at twice the size with
+two threads each (overlapped threading), and lzma blocks that trial
+detection identifies as executable code are branch converted (BCJ) before
+compression. All archives verified byte for byte.
+
+bins.tar (1GB tar of /usr/lib and /usr/bin ELF binaries)
+
+Compression		Size		Percentage	Compress	Decompress
+None			1073741824	100
+old lrzip (default)	239036025	22.3		2m10s		0m8.2s
+new lrzip (default)	233332246	21.7		3m34s		0m10.9s
+old lrzip -L9		232878807	21.7		3m17s		0m8.4s
+new lrzip -L9		222617263	20.7		8m25s		0m18.2s
+
+Updated defaults with overlapped threading (supersedes the tables above):
+
+enwik9  new default lzma	217124468	21.7	8m24s	0m11.0s
+  (was 218336904 with one block per thread, 223870481 originally: -3.0%)
+enwik9  new default zstd	233582800	23.4	4m45s	0m6.4s
+linux.tar new default lzma	141584831	10.0	4m22s	0m13.6s
+  (was 142061741 with one block per thread, 145848085 originally: -2.9%)
+
+Notes. On executable content the BCJ filter plus larger blocks give 2.4%
+smaller archives at the default level and 4.4% smaller at -L9 versus the
+old code at the same levels. The trial detection correctly leaves text
+and already filtered blocks alone (measured zero effect on enwik9). The
+overlapped threading recovers a further 0.5% on lzma text compression at
+default settings with all cpus still busy.
+
+
+Third 2026 update: delta and arm64 prefilters
+
+The x86 BCJ hook was generalised into a per block filter trial covering
+x86 BCJ, arm64 BCJ and byte delta at distances 1 to 4. Results on the
+silesia corpus (lrzip defaults, old = before any 2026 changes):
+
+silesia mr (16 bit MRI imagery, 9970564 bytes)
+old lrzip	2785965		new lrzip	2653863	(-4.7%, delta 2)
+silesia x-ray (16 bit film scan, 8474240 bytes)
+old lrzip	4478406		new lrzip	4251066	(-5.1%, delta 2)
+silesia concatenated (212MB mixed corpus)
+old lrzip	51861249	new lrzip	51555345	(-0.6%)
+
+The trial selection correctly leaves sao, osdb, text and source
+unfiltered. The arm64 converter is included but rarely wins: rzip's
+literal stream shifts the 4 byte instruction phase it depends on, an
+architectural interaction verified against xz --arm64 (which gains 4%
+on the same aarch64 binaries raw). Blocks simply stay unfiltered, and
+relocatable .ko objects were confirmed not to benefit from arm64 BCJ
+even outside lrzip.
+
+
+Fourth 2026 update: branch conversion before rzip (format 0.8)
+
+Executable chunks are now branch converted BEFORE the rzip stage when a
+duplicate window probe shows conversion creates more long range duplicate
+code than it breaks. Results (same machine, all archives verified byte for
+byte; "prev" is the previous 2026 code with post-rzip filters only):
+
+bins.tar (1GB tar of x86_64 ELF binaries)
+
+Compression		Size		Percentage	Compress	Decompress
+None			1073741824	100
+old lrzip (default)	239036025	22.3		2m10s		0m8.2s
+prev (default)		233332246	21.7		3m34s		0m10.9s
+new  (default)		228716503	21.3		3m40s		0m13.6s
+old lrzip -L9		232878807	21.7		3m17s		0m8.4s
+prev -L9		222617263	20.7		8m25s		0m18.2s
+new  -L9		217900863	20.3		9m48s		0m22.2s
+
+arm64-linked.tar (94MB of aarch64 ELF binaries)
+old lrzip		16560305	17.7
+new lrzip		16028165	17.1	(-3.2%; arm64 BCJ gained
+					 nothing at all post-rzip)
+
+Text and source are untouched by the probe: enwik9 and linux-6.6.tar
+outputs are identical to the previous update plus one header byte. A
+corpus of three identical copies of a binary tar (the dedup case branch
+conversion could hurt) is correctly refused by the probe: forcing the
+filter would cost 26%, the probe leaves it unfiltered and the archive
+still compresses slightly better than the old code.
+
+Overall versus the original code at the same level, archives of x86
+binaries are now 4.3% smaller at the default level and 6.4% smaller at
+-L9; wikipedia text 3.0% / 4.1%; kernel source 2.9% / 2.0%; aarch64
+binaries 3.2%; 16 bit imagery ~5%.
+
+
+Note: the single block maximum compression mode benchmarked above as
+"-L9" was subsequently moved behind the -u / --ultra modifier so that
+all numeric levels keep their threaded speed. The -L9 results in the
+2026 tables correspond to "-L9 --ultra" in the final interface; -L9
+alone now behaves like the threaded levels (128MB dictionary, fb 64).

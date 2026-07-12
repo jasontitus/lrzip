@@ -363,7 +363,7 @@ run_roundtrip_tests() {
 	WORKDIR_RT="$(mktemp -d "${TMPDIR:-/tmp}/lrzip-rt.XXXXXX")"
 	log "=== Part 2: round-trip suite (WORKDIR=$WORKDIR_RT) ==="
 
-	BACKENDS=("" "-l" "-g" "-b" "-n")
+	BACKENDS=("" "-l" "-g" "-b" "-n" "-Z")
 	PROFILES=(empty small zeros_small zeros_large incom_small incom_large over_window)
 
 	log "--- File mode × backends × content ---"

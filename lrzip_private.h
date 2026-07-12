@@ -246,6 +246,10 @@ typedef sem_t cksem_t;
 #define FLAG_ENCRYPT_LEGACY	(1 << 26)
 /* Session uses AES-256-GCM suite (magic[22]=3) */
 #define FLAG_ENCRYPT_AEAD	(1 << 27)
+#define FLAG_ZSTD_COMPRESS	(1 << 28)
+/* Maximum compression modifier: single block per stream, largest
+ * dictionaries, 273 fast bytes. Sacrifices parallelism for ratio. */
+#define FLAG_ULTRA		(1 << 29)
 
 #define MAGIC_LEN	24
 #define LRZC_LEN	24
@@ -268,6 +272,23 @@ typedef sem_t cksem_t;
 #define CTYPE_LZMA 6
 #define CTYPE_GZIP 7
 #define CTYPE_ZPAQ 8
+#define CTYPE_ZSTD 9
+/* lzma with a reversible filter applied first: x86 or arm64 BCJ branch
+ * conversion for executable code, or byte delta with distance 1-4 for
+ * numeric/sampled data. The filter is chosen per block by trial. */
+#define CTYPE_LZMA_BCJ 10
+#define CTYPE_LZMA_BCJ_ARM64 11
+#define CTYPE_LZMA_DELTA1 12
+#define CTYPE_LZMA_DELTA2 13
+#define CTYPE_LZMA_DELTA3 14
+#define CTYPE_LZMA_DELTA4 15
+/* the same filters over the zstd back end */
+#define CTYPE_ZSTD_BCJ 16
+#define CTYPE_ZSTD_BCJ_ARM64 17
+#define CTYPE_ZSTD_DELTA1 18
+#define CTYPE_ZSTD_DELTA2 19
+#define CTYPE_ZSTD_DELTA3 20
+#define CTYPE_ZSTD_DELTA4 21
 
 #define PASS_LEN 512
 #define HASH_LEN 64
@@ -300,7 +321,7 @@ typedef sem_t cksem_t;
 #define ARBITRARY_AT_EPOCH (ARBITRARY * pow (MOORE_TIMES_PER_SECOND, -T_ZERO))
 
 #define FLAG_VERBOSE (FLAG_VERBOSITY | FLAG_VERBOSITY_MAX)
-#define FLAG_NOT_LZMA (FLAG_NO_COMPRESS | FLAG_LZO_COMPRESS | FLAG_BZIP2_COMPRESS | FLAG_ZLIB_COMPRESS | FLAG_ZPAQ_COMPRESS)
+#define FLAG_NOT_LZMA (FLAG_NO_COMPRESS | FLAG_LZO_COMPRESS | FLAG_BZIP2_COMPRESS | FLAG_ZLIB_COMPRESS | FLAG_ZPAQ_COMPRESS | FLAG_ZSTD_COMPRESS)
 #define LZMA_COMPRESS	(!(control->flags & FLAG_NOT_LZMA))
 
 #define SHOW_PROGRESS	(control->flags & FLAG_SHOW_PROGRESS)
@@ -313,6 +334,8 @@ typedef sem_t cksem_t;
 #define BZIP2_COMPRESS	(control->flags & FLAG_BZIP2_COMPRESS)
 #define ZLIB_COMPRESS	(control->flags & FLAG_ZLIB_COMPRESS)
 #define ZPAQ_COMPRESS	(control->flags & FLAG_ZPAQ_COMPRESS)
+#define ZSTD_COMPRESS	(control->flags & FLAG_ZSTD_COMPRESS)
+#define ULTRA		(control->flags & FLAG_ULTRA)
 #define VERBOSE		(control->flags & FLAG_VERBOSE)
 #define VERBOSITY	(control->flags & FLAG_VERBOSITY)
 #define MAX_VERBOSE	(control->flags & FLAG_VERBOSITY_MAX)
@@ -415,6 +438,9 @@ struct rzip_state {
 	i64 last_match;
 	i64 chunk_size;
 	i64 mmap_size;
+	/* MD5 of this chunk was fed before a chunk filter converted the
+	 * buffer, so hash_search must not feed it again. */
+	bool chunk_md5_done;
 	char chunk_bytes;
 	char sliding;	/* non-zero: sliding mmap match path */
 	int fd_in, fd_out;
@@ -460,6 +486,9 @@ struct rzip_control {
 	i64 usable_ram; // the most ram we'll try to use on one activity
 	i64 maxram; // the largest chunk of ram to allocate
 	unsigned char lzma_properties[5]; // lzma properties, encoded
+	u32 lzma_dictsize; // lzma dictionary size, sized to ram and level
+	int zstd_level; // mapped zstd compression level
+	int zstd_wlog; // zstd window log2, sized to level
 	i64 window;
 	unsigned long flags;
 	i64 ramsize;
@@ -535,6 +564,10 @@ struct rzip_control {
 	void *log_data;
 
 	char chunk_bytes;
+	/* v0.8: LRZ_FILTER_* branch converter applied to the whole current
+	 * chunk before rzip (compress) / to reverse after reconstruction
+	 * (decompress). */
+	char chunk_filter;
 	struct sliding_buffer sb;
 	void (*do_mcpy)(rzip_control *, unsigned char *, i64, i64);
 
@@ -585,6 +618,7 @@ struct stream_info {
 	long next_thread;
 	int chunks;
 	char chunk_bytes;
+	char chunk_filter;
 };
 
 static inline void __attribute__((format(printf, 2, 3))) print_stuff(const rzip_control *control, const char *format, ...)

@@ -61,13 +61,16 @@ Options affecting compression:
  \-l, \-\-lzo               lzo compression (ultra fast)
  \-n, \-\-no-compress       no backend compression - prepare for other compressor
  \-z, \-\-zpaq              zpaq compression (best, extreme compression, extremely slow)
+ \-Z, \-\-zstd              zstd compression (modern, fast, good compression)
 Low level options:
- \-L, \-\-level level       set lzma/bzip2/gzip compression level (1-9, default 7)
+ \-L, \-\-level level       set lzma/bzip2/gzip/zstd compression level (1-9, default 7)
  \-N, \-\-nice-level value  Set nice value to value (default 19)
  \-p, \-\-threads value     Set processor count to override number of threads
  \-m, \-\-maxram size       Set maximum available ram in hundreds of MB
                          overrides detected amount of available ram
  \-T, \-\-threshold         Disable LZ4 compressibility testing
+ \-u, \-\-ultra             Maximum compression modifier: single block per stream,
+                         largest dictionaries. Much slower, best possible ratio
  \-U, \-\-unlimited         Use unlimited window size beyond ramsize (potentially much slower)
  \-w, \-\-window size       maximum compression window in hundreds of MB
                          default chosen by heuristic dependent on ram and chosen compression
@@ -225,6 +228,15 @@ compressors known for having some of the highest compression ratios possible
 but at the cost of being extremely slow on both compress and decompress (4x
 slower than lzma which is the default).
 .IP
+.IP "\fB-Z\fP"
+ZSTD compression. Uses Zstandard, a modern compressor combining LZ77 style
+matching with finite state entropy coding. Long distance matching over a
+large window is enabled, complementing rzip's first stage. Compared to the
+default lzma it compresses somewhat less but decompresses many times
+faster, and at low levels (\-L 1\&.\&.5) it is far faster than bzip2 or
+gzip for similar or better compression. The lrzip levels 1\-9 map onto the
+zstd levels 1\-22.
+.IP
 .PP
 .SH "Low level options"
 .PP
@@ -232,6 +244,30 @@ slower than lzma which is the default).
 Set the compression level from 1 to 9. The default is to use level 7, which
 gives good all round compression. The compression level is also strongly related
 to how much memory lrzip uses. See the \-w option for details.
+.IP
+With the lzma and zstd back ends each block is trial tested for a helpful
+prefilter: x86 or arm64 BCJ branch conversion for executable code, or byte
+delta for sampled data such as uncompressed imagery or audio. A filter is
+only applied when a fast trial compression of a sample shows a clear win,
+and is recorded per block, so mixed content archives use the right filter
+per region.
+.IP
+In addition, whole rzip chunks that a duplicate window probe identifies as
+executable code are branch converted before the rzip stage itself, which
+compresses binaries several percent smaller again. The probe compares long
+range duplicate content before and after conversion and refuses the filter
+when conversion would break existing duplicates, so archives that rely on
+rzip deduplicating repeated binaries are unaffected.
+.IP
+.IP "\fB-u --ultra\fP"
+Maximum compression modifier for the lzma, zpaq and zstd back ends: each
+stream is compressed as one large block with a dictionary sized to ram
+instead of being split into one block per thread, and lzma uses 273 fast
+bytes like xz \-e. Combine with \-L9 for the best possible ratio. This
+sacrifices parallelism, so it is several times slower on multicore
+machines both compressing and decompressing. Specifying \-p explicitly
+restores threaded operation. Without \-\-ultra all levels including 9 keep
+threaded operation and their usual speed.
 .IP
 .IP "\fB-N value\fP"
 The default nice value is 19. This option can be used to set the priority

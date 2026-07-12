@@ -44,6 +44,10 @@
 #include <lzo/lzoconf.h>
 #include <lzo/lzo1x.h>
 #include <lz4.h>
+#ifdef HAVE_LIBZSTD
+# include <zstd.h>
+# include <zstd_errors.h>
+#endif
 #ifdef HAVE_ERRNO_H
 # include <errno.h>
 #endif
@@ -62,6 +66,7 @@
 
 /* LZMA C Wrapper */
 #include "lzma/C/LzmaLib.h"
+#include "filters.h"
 
 #include "util.h"
 #include "lrzip_core.h"
@@ -295,29 +300,156 @@ static int gzip_compress_buf(rzip_control *control, struct compress_thread *cthr
 	return 0;
 }
 
+/* Map a block ctype back to its filter kind, or LRZ_FILTER_NONE */
+static int ctype_filter_kind(int ctype)
+{
+	if (ctype >= CTYPE_LZMA_BCJ && ctype <= CTYPE_LZMA_DELTA4)
+		return LRZ_FILTER_X86 + ctype - CTYPE_LZMA_BCJ;
+	if (ctype >= CTYPE_ZSTD_BCJ && ctype <= CTYPE_ZSTD_DELTA4)
+		return LRZ_FILTER_X86 + ctype - CTYPE_ZSTD_BCJ;
+	return LRZ_FILTER_NONE;
+}
+
+#ifdef HAVE_LIBZSTD
+static int zstd_compress_buf(rzip_control *control, struct compress_thread *cthread)
+{
+	size_t dlen, zstd_ret;
+	ZSTD_CCtx *cctx;
+	int filter;
+	uchar *c_buf;
+
+	if (!lz4_compresses(control, cthread->s_buf, cthread->s_len))
+		return 0;
+
+	print_maxverbose("Starting zstd back end compression thread...\n");
+
+	/* Convert in place with the best prefilter for this block, if any;
+	 * incompressible or failed blocks are converted back before
+	 * returning. */
+	filter = lrz_filter_trial(control, cthread->s_buf, cthread->s_len, false);
+	if (filter != LRZ_FILTER_NONE)
+		lrz_filter_convert_mem(cthread->s_buf, cthread->s_len, filter, true);
+
+	dlen = round_up_page(control, cthread->s_len);
+	c_buf = malloc(dlen);
+	if (!c_buf) {
+		print_err("Unable to allocate c_buf in zstd_compress_buf\n");
+		goto restore_filter_err;
+	}
+
+	cctx = ZSTD_createCCtx();
+	if (unlikely(!cctx)) {
+		print_err("Unable to allocate compression context in zstd_compress_buf\n");
+		dealloc(c_buf);
+		goto restore_filter_err;
+	}
+
+	ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, control->zstd_level);
+	/* rzip removes the very long range redundancy but the blocks handed
+	 * to us are still far larger than zstd's per-level default windows.
+	 * Long distance matching over a large window recovers the mid-range
+	 * matches at little speed cost. The window is clamped to the source
+	 * size internally so small blocks do not pay for this. */
+	ZSTD_CCtx_setParameter(cctx, ZSTD_c_enableLongDistanceMatching, 1);
+	ZSTD_CCtx_setParameter(cctx, ZSTD_c_windowLog, control->zstd_wlog);
+	/* Two workers per block pair with the halved block count from main;
+	 * jobs overlap by a full window so the ratio cost is minimal.
+	 * --ultra is single block maximum compression, so stay single
+	 * threaded there. */
+	if (!ULTRA)
+		ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, 2);
+
+	zstd_ret = ZSTD_compress2(cctx, c_buf, dlen, cthread->s_buf, (size_t)cthread->s_len);
+	ZSTD_freeCCtx(cctx);
+
+	if (ZSTD_isError(zstd_ret)) {
+		dealloc(c_buf);
+		if (ZSTD_getErrorCode(zstd_ret) == ZSTD_error_dstSize_tooSmall) {
+			/* Incompressible, leave as CTYPE_NONE */
+			print_maxverbose("Incompressible block\n");
+			goto restore_filter_ok;
+		}
+		if (ZSTD_getErrorCode(zstd_ret) == ZSTD_error_memory_allocation) {
+			print_verbose("Unable to allocate enough RAM for zstd compression, falling back to bzip2 compression.\n");
+			if (filter != LRZ_FILTER_NONE)
+				lrz_filter_convert_mem(cthread->s_buf, cthread->s_len, filter, false);
+			return bzip2_compress_buf(control, cthread);
+		}
+		print_err("ZSTD compression failure: %s\n", ZSTD_getErrorName(zstd_ret));
+		goto restore_filter_err;
+	}
+
+	if (unlikely((i64)zstd_ret >= cthread->c_len)) {
+		/* Incompressible, leave as CTYPE_NONE */
+		print_maxverbose("Incompressible block\n");
+		dealloc(c_buf);
+		goto restore_filter_ok;
+	}
+
+	cthread->c_len = zstd_ret;
+	dealloc(cthread->s_buf);
+	cthread->s_buf = c_buf;
+	cthread->c_type = filter == LRZ_FILTER_NONE ? CTYPE_ZSTD :
+		CTYPE_ZSTD_BCJ + filter - LRZ_FILTER_X86;
+	return 0;
+
+restore_filter_ok:
+	if (filter != LRZ_FILTER_NONE)
+		lrz_filter_convert_mem(cthread->s_buf, cthread->s_len, filter, false);
+	return 0;
+
+restore_filter_err:
+	if (filter != LRZ_FILTER_NONE)
+		lrz_filter_convert_mem(cthread->s_buf, cthread->s_len, filter, false);
+	return -1;
+}
+#endif
+
 static int lzma_compress_buf(rzip_control *control, struct compress_thread *cthread)
 {
 	unsigned char lzma_properties[5]; /* lzma properties, encoded */
-	int lzma_level, lzma_ret;
+	int lzma_level, lzma_fb, lzma_ret = SZ_ERROR_MEM;
 	size_t prop_size = 5; /* return value for lzma_properties */
+	u32 dictsize;
+	int filter;
 	uchar *c_buf;
 	size_t dlen;
 
 	if (!lz4_compresses(control, cthread->s_buf, cthread->s_len))
 		return 0;
 
-	/* only 7 levels with lzma, scale them */
-	lzma_level = control->compression_level * 7 / 9;
+	/* Convert in place with the best prefilter for this block, if any;
+	 * incompressible or failed blocks are converted back before
+	 * returning. */
+	filter = lrz_filter_trial(control, cthread->s_buf, cthread->s_len, false);
+	if (filter != LRZ_FILTER_NONE)
+		lrz_filter_convert_mem(cthread->s_buf, cthread->s_len, filter, true);
+
+	/* Use the lzma level scale directly. The dictionary size is set
+	 * explicitly so the level only selects the match finder settings;
+	 * levels 7+ use 64 fast bytes, and --ultra uses 273 like xz -e for
+	 * maximum ratio. */
+	lzma_level = control->compression_level;
 	if (!lzma_level)
 		lzma_level = 1;
+	else if (lzma_level > 9)
+		lzma_level = 9;
+	lzma_fb = (ULTRA ? 273 : -1);
 
 	print_maxverbose("Starting lzma back end compression thread...\n");
 retry:
+	/* The dictionary size is shared so that every block is encoded with
+	 * the same properties; a low memory retry shrinks it for all
+	 * outstanding work rather than just this block. */
+	lock_mutex(control, &control->control_lock);
+	dictsize = control->lzma_dictsize;
+	unlock_mutex(control, &control->control_lock);
 	dlen = round_up_page(control, cthread->s_len);
 	c_buf = malloc(dlen);
 	if (!c_buf) {
 		print_err("Unable to allocate c_buf in lzma_compress_buf\n");
-		return -1;
+		lzma_ret = SZ_ERROR_MEM;
+		goto restore_bcj;
 	}
 
 	/* LZMA SDK 26.02 LzmaCompress: level + threads; props returned in
@@ -327,9 +459,11 @@ retry:
 	lzma_ret = LzmaCompress(c_buf, &dlen, cthread->s_buf,
 		(size_t)cthread->s_len, lzma_properties, &prop_size,
 				lzma_level,
-				0, /* dict size. set default, choose by level */
-				-1, -1, -1, -1, /* lc, lp, pb, fb */
-				control->threads > 1 ? 2: 1);
+				dictsize, /* dict size scaled to level and ram */
+				-1, -1, -1, lzma_fb, /* lc, lp, pb, fb */
+				control->threads > 1 || ULTRA ? 2 : 1);
+				/* ultra packs whole streams into single blocks, so
+				 * keep the encoder's match finder thread. */
 				/* LZMA spec has threads = 1 or 2 only. */
 	if (lzma_ret != SZ_OK) {
 		switch (lzma_ret) {
@@ -351,6 +485,16 @@ retry:
 		/* can pass -1 if not compressible! Thanks Lasse Collin */
 		dealloc(c_buf);
 		if (lzma_ret == SZ_ERROR_MEM) {
+			if (dictsize > (1 << 20)) {
+				/* Shrink the shared dictionary so all blocks
+				 * keep identical properties. */
+				lock_mutex(control, &control->control_lock);
+				if (control->lzma_dictsize >= dictsize)
+					control->lzma_dictsize = dictsize >> 1;
+				unlock_mutex(control, &control->control_lock);
+				print_verbose("LZMA Warning: %d. Can't allocate enough RAM for compression window, trying smaller.\n", SZ_ERROR_MEM);
+				goto retry;
+			}
 			if (lzma_level > 1) {
 				lzma_level--;
 				print_verbose("LZMA Warning: %d. Can't allocate enough RAM for compression window, trying smaller.\n", SZ_ERROR_MEM);
@@ -359,21 +503,35 @@ retry:
 			/* If lzma cannot allocate any dictionary, fall back to
 			 * bzip2 so the block does not remain uncompressed. */
 			print_verbose("Unable to allocate enough RAM for any sized compression window, falling back to bzip2 compression.\n");
+			if (filter != LRZ_FILTER_NONE)
+				lrz_filter_convert_mem(cthread->s_buf, cthread->s_len, filter, false);
 			return bzip2_compress_buf(control, cthread);
-		} else if (lzma_ret == SZ_ERROR_OUTPUT_EOF)
-			return 0;
-		return -1;
+		}
+		goto restore_bcj;
 	}
 
 	if (unlikely((i64)dlen >= cthread->c_len)) {
 		/* Incompressible, leave as CTYPE_NONE */
 		print_maxverbose("Incompressible block\n");
 		dealloc(c_buf);
-		return 0;
+		goto restore_bcj;
 	}
 
-	/* Make sure multiple threads don't race on writing lzma_properties */
+	/* Make sure multiple threads don't race on writing lzma_properties.
+	 * If a low memory retry gave some block a smaller dictionary, keep
+	 * the largest so the decoder allocates enough window for every
+	 * block. */
 	lock_mutex(control, &control->control_lock);
+	if (control->lzma_prop_set) {
+		/* dict size is bytes 1-4 of the properties, little endian */
+		u32 stored_dict = control->lzma_properties[1] | control->lzma_properties[2] << 8 |
+			control->lzma_properties[3] << 16 | (u32)control->lzma_properties[4] << 24;
+		u32 this_dict = lzma_properties[1] | lzma_properties[2] << 8 |
+			lzma_properties[3] << 16 | (u32)lzma_properties[4] << 24;
+
+		if (this_dict > stored_dict)
+			memcpy(control->lzma_properties, lzma_properties, 5);
+	}
 	if (!control->lzma_prop_set) {
 		memcpy(control->lzma_properties, lzma_properties, 5);
 		control->lzma_prop_set = true;
@@ -388,8 +546,16 @@ retry:
 	cthread->c_len = dlen;
 	dealloc(cthread->s_buf);
 	cthread->s_buf = c_buf;
-	cthread->c_type = CTYPE_LZMA;
+	cthread->c_type = filter == LRZ_FILTER_NONE ? CTYPE_LZMA :
+		CTYPE_LZMA_BCJ + filter - LRZ_FILTER_X86;
 	return 0;
+
+restore_bcj:
+	/* Blocks left uncompressed (or handed to the error path) must hold
+	 * the original bytes, so undo any in place filter conversion. */
+	if (filter != LRZ_FILTER_NONE)
+		lrz_filter_convert_mem(cthread->s_buf, cthread->s_len, filter, false);
+	return lzma_ret == SZ_OK || lzma_ret == SZ_ERROR_OUTPUT_EOF ? 0 : -1;
 }
 
 static int lzo_compress_buf(rzip_control *control, struct compress_thread *cthread)
@@ -510,6 +676,55 @@ out:
 	}
 	return ret;
 }
+
+#ifdef HAVE_LIBZSTD
+static int zstd_decompress_buf(rzip_control *control __UNUSED__, struct uncomp_thread *ucthread)
+{
+	size_t dlen = ucthread->u_len;
+	size_t zstd_ret;
+	ZSTD_DCtx *dctx;
+	int ret = 0;
+	uchar *c_buf;
+
+	c_buf = ucthread->s_buf;
+	ucthread->s_buf = malloc(round_up_page(control, dlen));
+	if (unlikely(!ucthread->s_buf)) {
+		print_err("Failed to allocate %zu bytes for decompression\n", dlen);
+		ret = -1;
+		goto out;
+	}
+
+	dctx = ZSTD_createDCtx();
+	if (unlikely(!dctx)) {
+		print_err("Failed to allocate decompression context in zstd_decompress_buf\n");
+		ret = -1;
+		goto out;
+	}
+	/* Blocks are compressed with a large window for long distance
+	 * matching, so lift the decoder's default window limit. */
+	ZSTD_DCtx_setParameter(dctx, ZSTD_d_windowLogMax, 31);
+	zstd_ret = ZSTD_decompressDCtx(dctx, ucthread->s_buf, dlen, c_buf, ucthread->c_len);
+	ZSTD_freeDCtx(dctx);
+
+	if (unlikely(ZSTD_isError(zstd_ret))) {
+		print_err("Failed to decompress buffer - zstd error: %s\n", ZSTD_getErrorName(zstd_ret));
+		ret = -1;
+		goto out;
+	}
+
+	if (unlikely((i64)zstd_ret != ucthread->u_len)) {
+		print_err("Inconsistent length after decompression. Got %zu bytes, expected %"PRId64"\n", zstd_ret, ucthread->u_len);
+		ret = -1;
+	} else
+		dealloc(c_buf);
+out:
+	if (ret == -1) {
+		dealloc(ucthread->s_buf);
+		ucthread->s_buf = c_buf;
+	}
+	return ret;
+}
+#endif
 
 static int gzip_decompress_buf(rzip_control *control __UNUSED__, struct uncomp_thread *ucthread)
 {
@@ -1082,6 +1297,7 @@ void *open_stream_out(rzip_control *control, int f, unsigned int n, i64 chunk_li
 	sinfo->bufsize = sinfo->size = limit = chunk_limit;
 
 	sinfo->chunk_bytes = cbytes;
+	sinfo->chunk_filter = control->chunk_filter;
 	sinfo->num_streams = n;
 	sinfo->fd = f;
 
@@ -1537,6 +1753,10 @@ retry:
 			ret = gzip_compress_buf(control, cti);
 		else if (ZPAQ_COMPRESS)
 			ret = zpaq_compress_buf(control, cti, i);
+#ifdef HAVE_LIBZSTD
+		else if (ZSTD_COMPRESS)
+			ret = zstd_compress_buf(control, cti);
+#endif
 		else {
 			fatal_msg = "Dunno wtf compression to use!\n";
 			goto out;
@@ -1608,6 +1828,9 @@ retry:
 				 ctis->chunk_bytes, get_seek(control, ctis->fd));
 		/* Write chunk bytes of this block */
 		write_u8(control, ctis->chunk_bytes);
+
+		/* v0.8: chunk prefilter byte (LRZ_FILTER_NONE/X86/ARM64) */
+		write_u8(control, ctis->chunk_filter);
 
 		/* Write whether this is the last chunk, followed by the size
 		 * of this chunk. In streaming mode this matches block-last. */
@@ -1869,6 +2092,17 @@ retry:
 			case CTYPE_LZMA:
 				ret = lzma_decompress_buf(control, uci);
 				break;
+			case CTYPE_LZMA_BCJ:
+			case CTYPE_LZMA_BCJ_ARM64:
+			case CTYPE_LZMA_DELTA1:
+			case CTYPE_LZMA_DELTA2:
+			case CTYPE_LZMA_DELTA3:
+			case CTYPE_LZMA_DELTA4:
+				ret = lzma_decompress_buf(control, uci);
+				if (!ret)
+					lrz_filter_convert_mem(uci->s_buf, uci->u_len,
+							       ctype_filter_kind(uci->c_type), false);
+				break;
 			case CTYPE_LZO:
 				ret = lzo_decompress_buf(control, uci);
 				break;
@@ -1881,6 +2115,32 @@ retry:
 			case CTYPE_ZPAQ:
 				ret = zpaq_decompress_buf(control, uci, i);
 				break;
+#ifdef HAVE_LIBZSTD
+			case CTYPE_ZSTD:
+				ret = zstd_decompress_buf(control, uci);
+				break;
+			case CTYPE_ZSTD_BCJ:
+			case CTYPE_ZSTD_BCJ_ARM64:
+			case CTYPE_ZSTD_DELTA1:
+			case CTYPE_ZSTD_DELTA2:
+			case CTYPE_ZSTD_DELTA3:
+			case CTYPE_ZSTD_DELTA4:
+				ret = zstd_decompress_buf(control, uci);
+				if (!ret)
+					lrz_filter_convert_mem(uci->s_buf, uci->u_len,
+							       ctype_filter_kind(uci->c_type), false);
+				break;
+#else
+			case CTYPE_ZSTD:
+			case CTYPE_ZSTD_BCJ:
+			case CTYPE_ZSTD_BCJ_ARM64:
+			case CTYPE_ZSTD_DELTA1:
+			case CTYPE_ZSTD_DELTA2:
+			case CTYPE_ZSTD_DELTA3:
+			case CTYPE_ZSTD_DELTA4:
+				failure_return(("Archive uses zstd but this build has no zstd support\n"), NULL);
+				break;
+#endif
 			default:
 				failure_return(("Dunno wtf decompression type to use!\n"), NULL);
 				break;
@@ -2060,7 +2320,9 @@ fill_another:
 	/* Reject unknown types and CTYPE_NONE length mismatches (uninit leak). */
 	if (unlikely(c_type != CTYPE_NONE && c_type != CTYPE_BZIP2 &&
 		     c_type != CTYPE_LZO && c_type != CTYPE_LZMA &&
-		     c_type != CTYPE_GZIP && c_type != CTYPE_ZPAQ)) {
+		     c_type != CTYPE_GZIP && c_type != CTYPE_ZPAQ &&
+		     c_type != CTYPE_ZSTD &&
+		     !(c_type >= CTYPE_LZMA_BCJ && c_type <= CTYPE_ZSTD_DELTA4))) {
 		fatal_return(("Invalid compression type %d in stream block\n", c_type), -1);
 	}
 	if (unlikely(c_type == CTYPE_NONE && c_len != u_len)) {

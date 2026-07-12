@@ -114,19 +114,24 @@ static void usage(bool compat)
 	print_output("	-l, --lzo		lzo compression (ultra fast)\n");
 	print_output("	-n, --no-compress	no backend compression - prepare for other compressor\n");
 	print_output("	-z, --zpaq		zpaq compression (best, extreme compression, extremely slow)\n");
+#ifdef HAVE_LIBZSTD
+	print_output("	-Z, --zstd		zstd compression (modern, fast, good compression)\n");
+#endif
 	print_output("Low level options:\n");
 	if (compat) {
-		print_output("	-1 .. -9		set lzma/bzip2/gzip compression level (1-9, default 7)\n");
+		print_output("	-1 .. -9		set lzma/bzip2/gzip/zstd compression level (1-9, default 7)\n");
 		print_output("	--fast			alias for -1\n");
 		print_output("	--best			alias for -9\n");
 	}
 	if (!compat)
-		print_output("	-L, --level level	set lzma/bzip2/gzip compression level (1-9, default 7)\n");
+		print_output("	-L, --level level	set lzma/bzip2/gzip/zstd compression level (1-9, default 7)\n");
 	print_output("	-N, --nice-level value	Set nice value to value (default %d)\n", compat ? 0 : 19);
 	print_output("	-p, --threads value	Set processor count to override number of threads\n");
 	print_output("	-m, --maxram size	Set maximum available ram in hundreds of MB\n");
 	print_output("				overrides detected amount of available ram\n");
 	print_output("	-T, --threshold		Disable LZ4 compressibility testing\n");
+	print_output("	-u, --ultra		Maximum compression modifier: single block per stream,\n");
+	print_output("				largest dictionaries. Much slower, best possible ratio\n");
 	print_output("	-U, --unlimited		Use unlimited window size beyond ramsize (potentially much slower)\n");
 	print_output("	-w, --window size	maximum compression window in hundreds of MB\n");
 	print_output("				default chosen by heuristic dependent on ram and chosen compression\n");
@@ -199,8 +204,12 @@ static void show_summary(void)
 				print_verbose("GZIP\n");
 			else if (ZPAQ_COMPRESS)
 				print_verbose("ZPAQ. LZ4 Compressibility testing %s\n", (LZ4_TEST? "enabled" : "disabled"));
+			else if (ZSTD_COMPRESS)
+				print_verbose("ZSTD. LZ4 Compressibility testing %s\n", (LZ4_TEST? "enabled" : "disabled"));
 			else if (NO_COMPRESS)
 				print_verbose("RZIP pre-processing only\n");
+			if (ULTRA)
+				print_verbose("Ultra maximum compression modifier enabled\n");
 			if (control->window)
 				print_verbose("Compression Window: %"PRId64" = %lldMB\n", control->window, control->window * 100ull);
 			/* show heuristically computed window size */
@@ -256,11 +265,13 @@ static struct option long_options[] = {
 	{"suffix",	required_argument,	0,	'S'},
 	{"test",	no_argument,	0,	't'},  /* 25 */
 	{"threshold",	required_argument,	0,	'T'},
+	{"ultra",	no_argument,	0,	'u'},
 	{"unlimited",	no_argument,	0,	'U'},
 	{"verbose",	no_argument,	0,	'v'},
 	{"version",	no_argument,	0,	'V'},
 	{"window",	required_argument,	0,	'w'},  /* 30 */
 	{"zpaq",	no_argument,	0,	'z'},
+	{"zstd",	no_argument,	0,	'Z'},
 	{"fast",	no_argument,	0,	'1'},
 	{"best",	no_argument,	0,	'9'},
 	{0,	0,	0,	0},
@@ -306,8 +317,8 @@ static void recurse_dirlist(char *indir, char **dirlist, int *entries)
 	closedir(dirp);
 }
 
-static const char *loptions = "bcCdDefghHiKlL:nN:o:O:p:PqQrS:tTUm:vVw:z?";
-static const char *coptions = "bcCdefghHikKlLnN:o:O:p:PrS:tTUm:vVw:z?123456789";
+static const char *loptions = "bcCdDefghHiKlL:nN:o:O:p:PqQrS:tTuUm:vVw:zZ?";
+static const char *coptions = "bcCdefghHikKlLnN:o:O:p:PrS:tTuUm:vVw:zZ?123456789";
 
 int main(int argc, char *argv[])
 {
@@ -316,7 +327,7 @@ int main(int argc, char *argv[])
 	struct timeval start_time, end_time;
 	struct sigaction handler;
 	double seconds,total_time; // for timers
-	bool nice_set = false;
+	bool nice_set = false, threads_set = false;
 	int c, i;
 	int hours,minutes;
 	extern int optind;
@@ -369,11 +380,12 @@ int main(int argc, char *argv[])
 		case 'l':
 		case 'n':
 		case 'z':
+		case 'Z':
 			/* If some compression was chosen in lrzip.conf, allow this one time
 			 * because conf_file_compression_set will be true
 			 */
 			if ((control->flags & FLAG_NOT_LZMA) && conf_file_compression_set == false)
-				failure("Can only use one of -l, -b, -g, -z or -n\n");
+				failure("Can only use one of -l, -b, -g, -z, -Z or -n\n");
 			/* Select Compression Mode */
 			control->flags &= ~FLAG_NOT_LZMA; /* must clear all compressions first */
 			if (c == 'b')
@@ -386,6 +398,12 @@ int main(int argc, char *argv[])
 				control->flags |= FLAG_NO_COMPRESS;
 			else if (c == 'z')
 				control->flags |= FLAG_ZPAQ_COMPRESS;
+			else if (c == 'Z')
+#ifdef HAVE_LIBZSTD
+				control->flags |= FLAG_ZSTD_COMPRESS;
+#else
+				failure("This build has no zstd support\n");
+#endif
 			/* now FLAG_NOT_LZMA will evaluate as true */
 			conf_file_compression_set = false;
 			break;
@@ -498,6 +516,7 @@ int main(int argc, char *argv[])
 				failure("Must have at least one thread\n");
 			if (*endptr)
 				failure("Extra characters after number of threads: \'%s\'\n", endptr);
+			threads_set = true;
 			break;
 		case 'P':
 			control->flags |= FLAG_SHOW_PROGRESS;
@@ -530,6 +549,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'T':
 			control->flags &= ~FLAG_THRESHOLD;
+			break;
+		case 'u':
+			control->flags |= FLAG_ULTRA;
 			break;
 		case 'U':
 			control->flags |= FLAG_UNLIMITED;
@@ -618,6 +640,27 @@ int main(int argc, char *argv[])
 	if (UNLIMITED && STDIN) {
 		print_err("Cannot have -U and stdin, unlimited mode disabled.\n");
 		control->flags &= ~FLAG_UNLIMITED;
+	}
+
+	/* --ultra is maximum compression: compress each stream as a single
+	 * large block with a dictionary sized to ram instead of splitting
+	 * chunks into one block per thread, since independently compressed
+	 * blocks cost ratio. Parallelism is sacrificed deliberately; -p can
+	 * still force multiple threads. */
+	if (ULTRA &&
+	    (LZMA_COMPRESS || ZPAQ_COMPRESS || ZSTD_COMPRESS) && !threads_set &&
+	    !(DECOMPRESS || TEST_ONLY || INFO)) {
+		control->threads = 1;
+		print_verbose("Ultra maximum compression: using single block per stream\n");
+	} else if ((LZMA_COMPRESS || ZSTD_COMPRESS) && control->threads > 1 &&
+	    !threads_set && !(DECOMPRESS || TEST_ONLY || INFO)) {
+		/* lzma runs a second match finder thread and zstd two worker
+		 * threads per block, so half as many blocks still keeps every
+		 * cpu busy while the larger blocks compress several percent
+		 * smaller. -p restores one block per thread. */
+		control->threads = (control->threads + 1) / 2;
+		print_verbose("Using %d larger blocks with 2 threads each for better compression\n",
+			      control->threads);
 	}
 
 	setup_overhead(control);
