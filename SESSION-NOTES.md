@@ -36,13 +36,33 @@ project documentation — fold anything durable into `WHATS-NEW` or
   > file format it would be now before the 0.7 format propagates in the
   > wild, but I'm unsure there is demand for such changes.
 
-  **This needs a reply posted** (drafted below, not yet confirmed posted —
-  do that first on the laptop). The short version: PR #268 makes **no**
-  format change at all — verified by decompressing a `-L9 --ultra` archive
-  with an unmodified pre-PR lrzip binary, byte-identical. His format-window
-  question only applies to the two follow-ups that were deliberately held
-  back (see below), and is really a question about whether *those* should
-  become PRs, not a blocker for #268.
+  **UPDATE 2026-07-12 (laptop session): the reply below was posted**
+  (https://github.com/ckolivas/lrzip/pull/268#issuecomment-4953058816),
+  reworked to link the two follow-up PRs which are now open:
+
+  - **`ckolivas/lrzip#269`** — "Add --filter: opt-in per-block BCJ and
+    delta prefilters for lzma". Branch `claude/block-prefilters`, cut
+    clean from master (NOT from this research branch): block types 9-14
+    (no zstd hole), gated behind a new `--filter[=auto|x86|arm64|delta1-4]`
+    long option, format stays 0.7, byte-identical without the flag
+    (verified vs stock at L1/7/9, -p1, all backends). Adds a Part 3
+    filter suite to tests/regression.sh (23 tests).
+  - **`ckolivas/lrzip#270`** — "Apply branch conversion before rzip under
+    --filter (archive format 0.8)". Branch `claude/pre-rzip-conversion`,
+    stacked on #269. The 0.8 chunk-prefilter byte is written ONLY when
+    --filter is used; without it output is byte-identical stock 0.7.
+    **Deviation from this research branch:** the arm64 probe leg gained a
+    coverage gate (chunk ≤ 3× the 64MB samples, i.e. 192MB) after a 417MB
+    debian arm64 /usr tree regressed +3% archive-wide despite a 2% sample
+    win — reproduced with this research branch's binary too (+1.2%), so
+    the probe weakness is inherited, not carve-introduced; a 107MB
+    ubuntu-base arm64 rootfs gains −2.2% and still auto-fires. Part 4
+    chunk suite added (12 tests).
+
+  Original context: PR #268 makes **no** format change at all — verified
+  by decompressing a `-L9 --ultra` archive with an unmodified pre-PR
+  lrzip binary, byte-identical. Con's format-window question only applies
+  to the two follow-ups above, which are now concrete PRs he can weigh.
 
 ### Reply to post on ckolivas/lrzip#268
 
@@ -182,15 +202,18 @@ the ~1.4GB gap between the two archived trees.
 
 ## Suggested next steps
 
-1. Post the reply above on `ckolivas/lrzip#268`.
-2. Watch for Con Kolivas's review — GitHub PR subscription/notifications
-   from the laptop, since this session's tool scope is locked to
-   `jasontitus/lrzip` and can't reach `ckolivas/lrzip` directly (hit a
-   "cross-tier adds are not supported" error trying to add it mid-session).
-3. If he wants either follow-up, cut a fresh branch from `master` (or from
-   wherever #268 lands after merge) the same way `claude/max-compression-ultra`
-   was cut — don't just open the full research branch as a PR, it carries
-   the lzma retune unconditionally which was deliberately excluded from the
-   opt-in-only story upstream wants.
-4. Delete this file once the above is resolved and durable info is folded
+1. ~~Post the reply above on `ckolivas/lrzip#268`.~~ DONE 2026-07-12.
+2. ~~Open the follow-up PRs.~~ DONE 2026-07-12: #269 (block filters,
+   `claude/block-prefilters`) and #270 (pre-rzip conversion,
+   `claude/pre-rzip-conversion`, stacked on #269). Both strictly gated
+   behind `--filter`; full regression suite green on both.
+3. Watch for Con Kolivas's review of #268/#269/#270. If #269 merges
+   first, rebase #270 to a single commit. Whichever of #268/#269 lands
+   second needs a trivial rebase (adjacent lines in main.c/man page,
+   test suite Part numbering).
+4. Remaining held-back item: the lzma level retune (only exists
+   unconditionally on this research branch); needs its own flag (e.g.
+   --lzma-tune) if it ever becomes a PR. The zstd backend also remains
+   fork-only.
+5. Delete this file once the above is resolved and durable info is folded
    into `WHATS-NEW`.
