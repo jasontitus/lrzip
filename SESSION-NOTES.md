@@ -36,6 +36,16 @@ project documentation — fold anything durable into `WHATS-NEW` or
   > file format it would be now before the 0.7 format propagates in the
   > wild, but I'm unsure there is demand for such changes.
 
+  **UPDATE 2 (2026-07-13): Con chose the clean break, rolled into 0.7.**
+  His direction: no 0.8 special casing; the chunk prefilter byte is now an
+  unconditional part of the 0.7 chunk header; version 0.7.1 cements it
+  (gold test 541->542); prefilters are enabled by default with -u
+  (--filter=none opts out). The three PRs were restacked into one linear
+  series: #268 (5a71187) -> #269 (3b9a933) -> #270 (62e8aa3).
+  Consequence, stated on the PRs: 0.7.0 and 0.7.1 archives are mutually
+  unreadable (magic indistinguishable); 0.6-and-older read unchanged.
+  All suites green (Parts 1-5). Reply posted on #268; awaiting review.
+
   **UPDATE 2026-07-12 (laptop session): the reply below was posted**
   (https://github.com/ckolivas/lrzip/pull/268#issuecomment-4953058816),
   reworked to link the two follow-up PRs which are now open:
