@@ -91,7 +91,6 @@ List of defined IDs
       0C - BZip2 (not used. Use {040202} instead)
       0E - LZMA (LZMA-zip)
 
-      5D - ZSTD
       5F - xz
       60 - Jpeg
       61 - WavPack
@@ -131,7 +130,6 @@ List of defined IDs
          01 - LZHAM
 
       11 xx - reserved (Tino Reichardt)
-         01 - ZSTD
          02 - BROTLI
          04 - LZ4
          05 - LZ5
