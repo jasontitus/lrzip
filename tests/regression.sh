@@ -124,8 +124,9 @@ run_gold_tests() {
     cp testfile.lrz ro
     chmod 500 ro
     cd ro
-    lrz -dc testfile.lrz | wc -c
+    lrz -dc testfile.lrz | wc -c | tr -d ' '
     cd ..
+    chmod 700 ro
 
   echo 'this should be silent'
     lrz -d testfile.lrz
@@ -141,37 +142,41 @@ run_gold_tests() {
     mkdir -p t
     chmod 111 t
     cd t
-    TMPDIR=.. lrz -d < ../testfile.lrz | wc -c
+    TMPDIR=.. lrz -d < ../testfile.lrz | wc -c | tr -d ' '
     cd ..
+    chmod 700 t
     rm -rf t
 
   echo 'Decompress in read only dir'
     mkdir -p t
     chmod 111 t
     cd t
-    lrz -d < ../testfile.lrz | wc -c
+    lrz -d < ../testfile.lrz | wc -c | tr -d ' '
     cd ..
+    chmod 700 t
     rm -rf t
 
   echo 'Test -cd'
     mkdir -p t
     chmod 111 t
     cd t
-    lrz -cd  ../testfile.lrz | wc -c
+    lrz -cd  ../testfile.lrz | wc -c | tr -d ' '
     cd ..
+    chmod 700 t
     rm -rf t
 
   echo 'Test -cfd should not remove testfile.lrz'
     mkdir -p t
     chmod 111 t
     cd t
-    lrz -cfd  ../testfile.lrz | wc -c
+    lrz -cfd  ../testfile.lrz | wc -c | tr -d ' '
     cd ..
+    chmod 700 t
     rm -rf t
     ls testfile.lrz
 
   echo 'Test -1c'
-    lrz -1c testfile | wc -c
+    lrz -1c testfile | wc -c | tr -d ' '
 
   echo 'Test -r'
     mkdir t
@@ -185,17 +190,18 @@ run_gold_tests() {
     mkdir t
     touch t/t{1..10}
     tar --use-compress-program lrz -cf testfile.tar.lrz t 2>/dev/null
-    tar --use-compress-program lrz -tf testfile.tar.lrz 2>/dev/null | LC_ALL=C sort
-    tar --use-compress-program lrz -tf testfile.tar.lrz 2>/dev/null | wc -l
+    # 'lrz -d' spelled out: GNU tar appends -d for reads but bsdtar does not
+    tar --use-compress-program 'lrz -d' -tf testfile.tar.lrz 2>/dev/null | LC_ALL=C sort
+    tar --use-compress-program 'lrz -d' -tf testfile.tar.lrz 2>/dev/null | wc -l | tr -d ' '
     rm -r t
 
   if [[ "${SKIP_SLOW:-0}" != 1 ]] && command -v parallel >/dev/null 2>&1; then
   echo 'test compress of 1 GB data with parallel --pipe --compress'
     # Redirect yes stderr: head closes the pipe early → "Broken pipe" on some coreutils
     yes "`echo {1..100}`" 2>/dev/null |
-      head -c 1G |
+      head -c 1073741824 |
       parallel --pipe --block 100m --compress-program lrz cat |
-      wc -c
+      wc -c | tr -d ' '
   else
   echo 'test compress of 1 GB data with parallel --pipe --compress'
   echo '1073741824'
@@ -204,9 +210,9 @@ run_gold_tests() {
   if [[ "${SKIP_SLOW:-0}" != 1 ]]; then
   echo 'test compress of 1 GB with sort --compress-program'
     yes "`echo {1..100}`" 2>/dev/null |
-      head -c 1G |
+      head -c 1073741824 |
       sort --compress-program lrz |
-      wc -c
+      wc -c | tr -d ' '
   else
   echo 'test compress of 1 GB with sort --compress-program'
   echo '1073741825'
@@ -452,8 +458,9 @@ run_ultra_tests() {
 	make_input "$WORKDIR_U/ratio.bin" zeros_large
 	"$LRZIP" "${BASE_FLAGS[@]}" -L9 -o "$WORKDIR_U/plain.lrz" "$WORKDIR_U/ratio.bin" >/dev/null 2>&1
 	"$LRZIP" "${BASE_FLAGS[@]}" -L9 -u -o "$WORKDIR_U/ultra.lrz" "$WORKDIR_U/ratio.bin" >/dev/null 2>&1
-	plain=$(stat -c%s "$WORKDIR_U/plain.lrz" 2>/dev/null || echo 0)
-	ultra=$(stat -c%s "$WORKDIR_U/ultra.lrz" 2>/dev/null || echo 0)
+	# wc -c rather than stat: -c%s is GNU, -f%z is BSD
+	plain=$(($(wc -c < "$WORKDIR_U/plain.lrz" 2>/dev/null || echo 0)))
+	ultra=$(($(wc -c < "$WORKDIR_U/ultra.lrz" 2>/dev/null || echo 0)))
 	if [[ "$ultra" -gt 0 && "$ultra" -le "$plain" ]]; then
 		log "PASS  ultra/ratio ($ultra <= $plain)"
 		PASS_OK=$((PASS_OK + 1))
