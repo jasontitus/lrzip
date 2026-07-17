@@ -1,0 +1,71 @@
+name: macos_build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies (Homebrew)
+      run: brew install autoconf automake libtool pkg-config lzo lz4 zstd
+    - name: autogen
+      run: NOCONFIGURE=1 ./autogen.sh
+    - name: configure
+      run: |
+        export LDFLAGS="-L$(brew --prefix)/lib"
+        export CPPFLAGS="-I$(brew --prefix)/include"
+        export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"
+        ./configure --disable-asm
+    - name: make
+      run: make
+    - name: show binary and version
+      run: file ./lrzip && ./lrzip -V
+    - name: exercise -u/--ultra
+      run: |
+        cat main.c util.c stream.c filters.c lzma/C/*.c > /tmp/text.bin
+        ls -la /tmp/text.bin
+        ./lrzip -L9 -u -f -o /tmp/text.lrz /tmp/text.bin
+        ./lrzip -t /tmp/text.lrz
+        ./lrzip -d -f -o /tmp/text.out /tmp/text.lrz
+        cmp /tmp/text.bin /tmp/text.out && echo "ULTRA ROUNDTRIP OK ON MACOS"
+    - name: make check
+      run: make check
+
+  build-macos-without-zstd:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies (Homebrew, no zstd)
+      run: brew install autoconf automake libtool pkg-config lzo lz4
+    - name: autogen
+      run: NOCONFIGURE=1 ./autogen.sh
+    - name: configure without zstd
+      run: |
+        export LDFLAGS="-L$(brew --prefix)/lib"
+        export CPPFLAGS="-I$(brew --prefix)/include"
+        export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"
+        ./configure --without-zstd --disable-asm
+    - name: make
+      run: make
+    - name: show binary and version
+      run: file ./lrzip && ./lrzip -V
+
+  build-ubuntu-zstd:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: sudo apt update && sudo apt install -y liblzo2-dev liblz4-dev libbz2-dev zlib1g-dev libzstd-dev
+    - name: autogen
+      run: NOCONFIGURE=1 ./autogen.sh
+    - name: configure
+      run: ./configure
+    - name: make
+      run: make
+    - name: make check
+      run: make check
