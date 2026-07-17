@@ -454,10 +454,12 @@ run_ultra_tests() {
 	run_one "ultra/stdio/small/lzma" small "-u -L9" stdio 0
 
 	# Ultra must not compress a highly compressible input worse than the
-	# threaded default at the same level.
+	# threaded default at the same level. Pin ram (-m 3) and threads
+	# (-p 2) so window and split sizes match on any machine profile;
+	# unpinned, a low-ram runner can tip the comparison by a few bytes.
 	make_input "$WORKDIR_U/ratio.bin" zeros_large
-	"$LRZIP" "${BASE_FLAGS[@]}" -L9 -o "$WORKDIR_U/plain.lrz" "$WORKDIR_U/ratio.bin" >/dev/null 2>&1
-	"$LRZIP" "${BASE_FLAGS[@]}" -L9 -u -o "$WORKDIR_U/ultra.lrz" "$WORKDIR_U/ratio.bin" >/dev/null 2>&1
+	"$LRZIP" "${BASE_FLAGS[@]}" -L9 -m 3 -p 2 -o "$WORKDIR_U/plain.lrz" "$WORKDIR_U/ratio.bin" >/dev/null 2>&1
+	"$LRZIP" "${BASE_FLAGS[@]}" -L9 -u -m 3 -p 2 -o "$WORKDIR_U/ultra.lrz" "$WORKDIR_U/ratio.bin" >/dev/null 2>&1
 	# wc -c rather than stat: -c%s is GNU, -f%z is BSD
 	plain=$(($(wc -c < "$WORKDIR_U/plain.lrz" 2>/dev/null || echo 0)))
 	ultra=$(($(wc -c < "$WORKDIR_U/ultra.lrz" 2>/dev/null || echo 0)))
