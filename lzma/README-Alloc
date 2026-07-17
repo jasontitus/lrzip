@@ -1,0 +1,7 @@
+Memory allocation notes for the embedded LZMA SDK (26.02)
+
+Alloc.c provides MyAlloc/MyFree and optional large-page helpers (when
+Z7_LARGE_PAGES is defined, which Precomp.h enables by default on
+supported platforms). lrzip uses the default g_Alloc path via LzmaLib.
+
+To experiment with allocation strategy, see Alloc.c / Alloc.h in C/.

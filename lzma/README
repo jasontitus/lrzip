@@ -1,0 +1,21 @@
+LZMA SDK 26.02 integration for lrzip
+====================================
+
+This tree embeds a subset of Igor Pavlov's LZMA SDK 26.02 (2026-06-25),
+public domain, from https://www.7-zip.org/sdk.html
+
+Files under C/ are the LzmaLib / encoder-decoder / match-finder sources
+needed for LzmaCompress() and LzmaUncompress() as used by stream.c.
+Full SDK staging (for reference only, not built) may live at
+../lzma-sdk-26.02/ in a developer tree.
+
+Previous lrzip integration was based on SDK ~4.63 / 9.x with a zlib-like
+wrapper. The LzmaCompress/LzmaUncompress API is unchanged in shape;
+internal code, default dictionary sizes per level, and build deps differ.
+
+Build: automake liblzma.la in C/ (see C/Makefile.am). Optional ASM CRC
+from older trees is no longer used; the match finder carries its own CRC
+table.
+
+Docs from the SDK (DOC/) are installed as lzma documentation where the
+parent Makefile.am lists them.
