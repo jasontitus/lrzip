@@ -19,7 +19,7 @@ jobs:
         export LDFLAGS="-L$(brew --prefix)/lib"
         export CPPFLAGS="-I$(brew --prefix)/include"
         export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"
-        ./configure
+        ./configure --disable-asm
     - name: make
       run: make
     - name: show binary and version
@@ -48,7 +48,7 @@ jobs:
         export LDFLAGS="-L$(brew --prefix)/lib"
         export CPPFLAGS="-I$(brew --prefix)/include"
         export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"
-        ./configure --without-zstd
+        ./configure --without-zstd --disable-asm
     - name: make
       run: make
     - name: show binary and version
